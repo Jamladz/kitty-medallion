@@ -9,8 +9,21 @@ import fs from 'fs';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const getDirnameAndFilename = () => {
+  // If we are in CommonJS, __dirname and __filename will be natively available as global-like variables in the scope.
+  // Note: We check if they are defined, but inside an arrow function/wrapper, esbuild will replace/provide them appropriately.
+  try {
+    if (typeof __dirname !== 'undefined' && typeof __filename !== 'undefined') {
+      return { __dirname, __filename };
+    }
+  } catch (e) {}
+
+  const filename = typeof import.meta !== 'undefined' && import.meta.url ? fileURLToPath(import.meta.url) : '';
+  const dirname = filename ? path.dirname(filename) : process.cwd();
+  return { __dirname: dirname, __filename: filename };
+};
+
+const { __dirname, __filename } = getDirnameAndFilename();
 
 const app = express();
 app.use(cors());
