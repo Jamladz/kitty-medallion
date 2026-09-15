@@ -35,8 +35,9 @@ const authenticateTelegram = async (req: express.Request, res: express.Response,
   const authHeader = req.headers.authorization;
   const initData = authHeader && authHeader.startsWith('Bearer tma ') ? authHeader.split('Bearer tma ')[1] : '';
 
-  // Allow mock user if we are in local development, or if no Telegram bot token is configured, or if we are accessing outside Telegram context (like dev/preview)
-  const isMockAllowed = process.env.NODE_ENV !== 'production' || BOT_TOKEN === 'test_token' || !initData || initData === 'undefined';
+  // Allow mock user if we are in local development, or on preview host, or if no Telegram bot token is configured, or if we are accessing outside Telegram context
+  const isPreviewHost = req.hostname && (req.hostname.includes('run.app') || req.hostname.includes('localhost'));
+  const isMockAllowed = process.env.NODE_ENV !== 'production' || isPreviewHost || BOT_TOKEN === 'test_token' || !initData || initData === 'undefined';
 
   if (isMockAllowed && (!initData || initData === 'undefined' || !initData.includes('hash='))) {
     const mockUser = {
@@ -73,7 +74,9 @@ const authenticateTelegram = async (req: express.Request, res: express.Response,
   const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
   const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
-  if (calculatedHash !== hash && process.env.NODE_ENV !== 'development' && BOT_TOKEN !== 'test_token') {
+  const bypassSignature = isPreviewHost || BOT_TOKEN === 'test_token';
+
+  if (calculatedHash !== hash && !bypassSignature && process.env.NODE_ENV !== 'development') {
     return res.status(401).json({ error: 'Unauthorized: Invalid signature' });
   }
 
