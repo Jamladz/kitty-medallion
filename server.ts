@@ -32,66 +32,73 @@ app.use(express.json());
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'test_token';
 
 const authenticateTelegram = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const authHeader = req.headers.authorization;
-  const initData = authHeader && authHeader.startsWith('Bearer tma ') ? authHeader.split('Bearer tma ')[1] : '';
-
-  // Allow mock user if we are in local development, or on preview host, or if no Telegram bot token is configured, or if we are accessing outside Telegram context
-  const isPreviewHost = req.hostname && (req.hostname.includes('run.app') || req.hostname.includes('localhost'));
-  const isMockAllowed = process.env.NODE_ENV !== 'production' || isPreviewHost || BOT_TOKEN === 'test_token' || !initData || initData === 'undefined';
-
-  if (isMockAllowed && (!initData || initData === 'undefined' || !initData.includes('hash='))) {
-    const mockUser = {
-      id: 999999999,
-      first_name: 'Developer',
-      last_name: 'User',
-      username: 'dev_user',
-      language_code: 'en'
-    };
-    (req as any).telegramUser = mockUser;
-    (req as any).userId = '999999999';
-    return next();
-  }
-
-  if (!authHeader || !authHeader.startsWith('Bearer tma ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing or invalid token format' });
-  }
-
-  const urlParams = new URLSearchParams(initData);
-  const hash = urlParams.get('hash');
-  
-  if (!hash) {
-    return res.status(401).json({ error: 'Unauthorized: Missing hash' });
-  }
-
-  urlParams.delete('hash');
-  const paramsList: string[] = [];
-  urlParams.forEach((value, key) => {
-    paramsList.push(`${key}=${value}`);
-  });
-  paramsList.sort();
-  const dataCheckString = paramsList.join('\n');
-  
-  const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-  const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
-
-  const bypassSignature = isPreviewHost || BOT_TOKEN === 'test_token';
-
-  if (calculatedHash !== hash && !bypassSignature && process.env.NODE_ENV !== 'development') {
-    return res.status(401).json({ error: 'Unauthorized: Invalid signature' });
-  }
-
-  const userStr = urlParams.get('user');
-  if (!userStr) {
-    return res.status(401).json({ error: 'Unauthorized: Missing user data' });
-  }
-
   try {
+    const authHeader = req.headers.authorization;
+    let initData = authHeader && authHeader.startsWith('Bearer tma ') ? authHeader.split('Bearer tma ')[1] : '';
+
+    // Support custom header fallback in case Authorization header is stripped by corporate proxies or WAFs
+    const customHeader = req.headers['x-telegram-init-data'] || req.headers['x-tg-init-data'];
+    if (!initData && customHeader) {
+      initData = String(customHeader);
+    }
+
+    // Allow mock user if we are in local development, or on preview host, or if no Telegram bot token is configured, or if we are accessing outside Telegram context
+    const isPreviewHost = req.hostname && (req.hostname.includes('run.app') || req.hostname.includes('localhost'));
+    const isMockAllowed = process.env.NODE_ENV !== 'production' || isPreviewHost || BOT_TOKEN === 'test_token' || !initData || initData === 'undefined';
+
+    if (isMockAllowed && (!initData || initData === 'undefined' || !initData.includes('hash='))) {
+      const mockUser = {
+        id: 999999999,
+        first_name: 'Developer',
+        last_name: 'User',
+        username: 'dev_user',
+        language_code: 'en'
+      };
+      (req as any).telegramUser = mockUser;
+      (req as any).userId = '999999999';
+      return next();
+    }
+
+    if (!initData) {
+      return res.status(401).json({ error: 'Unauthorized: Missing Telegram WebApp initData' });
+    }
+
+    const urlParams = new URLSearchParams(initData);
+    const hash = urlParams.get('hash');
+    
+    if (!hash) {
+      return res.status(401).json({ error: 'Unauthorized: Missing signature hash' });
+    }
+
+    urlParams.delete('hash');
+    const paramsList: string[] = [];
+    urlParams.forEach((value, key) => {
+      paramsList.push(`${key}=${value}`);
+    });
+    paramsList.sort();
+    const dataCheckString = paramsList.join('\n');
+    
+    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+    const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+    const bypassSignature = isPreviewHost || BOT_TOKEN === 'test_token';
+
+    if (calculatedHash !== hash && !bypassSignature && process.env.NODE_ENV !== 'development') {
+      return res.status(401).json({ error: 'Unauthorized: Invalid Telegram signature' });
+    }
+
+    const userStr = urlParams.get('user');
+    if (!userStr) {
+      return res.status(401).json({ error: 'Unauthorized: Missing user payload' });
+    }
+
     const user = JSON.parse(userStr);
     (req as any).telegramUser = user;
     (req as any).userId = String(user.id);
     next();
-  } catch (e) {
-    return res.status(401).json({ error: 'Unauthorized: Invalid user JSON' });
+  } catch (error: any) {
+    console.error('Telegram authentication exception:', error);
+    return res.status(401).json({ error: 'Unauthorized: Authentication exception occurred', details: error.message });
   }
 };
 

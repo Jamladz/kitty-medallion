@@ -22,9 +22,26 @@ const AppContent = () => {
   if (error || !user) {
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center p-6 text-center bg-[#0f0f0f]">
-        <h1 className="text-2xl font-bold text-red-500 mb-2">Access Denied</h1>
-        <p className="text-gray-400">Please open this application inside Telegram.</p>
-        <p className="text-gray-500 text-sm mt-4 text-xs">{error}</p>
+        <div className="bg-[#161616] p-8 rounded-2xl border border-gray-800 max-w-sm w-full shadow-2xl">
+          <div className="w-16 h-16 bg-red-950/30 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-900/50">
+            <span className="text-3xl text-red-500">⚠</span>
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-2">Access Denied</h1>
+          <p className="text-gray-400 text-sm mb-6">Please open this application inside Telegram or reload the application page.</p>
+          
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full bg-orange-500 hover:bg-orange-600 active:scale-[0.98] text-white font-semibold py-3 px-6 rounded-xl transition duration-150 mb-3 shadow-lg shadow-orange-500/20"
+          >
+            Refresh Page
+          </button>
+
+          {error && (
+            <div className="mt-4 p-3 bg-red-950/20 rounded-lg border border-red-900/30">
+              <p className="text-red-400 text-xs font-mono break-all">{error}</p>
+            </div>
+          )}
+        </div>
       </div>
     );
   }

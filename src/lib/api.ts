@@ -10,6 +10,7 @@ const fetchApi = async (path: string, options: RequestInit = {}) => {
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer tma ${initData}`,
+    'X-Telegram-Init-Data': initData,
     ...options.headers,
   };
   
