@@ -20,6 +20,10 @@ interface TelegramWebApp {
   offEvent: (eventType: string, eventHandler: Function) => void;
   addToHomeScreen?: () => void;
   checkHomeScreenStatus?: (callback: (status: string) => void) => void;
+  isVersionAtLeast?: (version: string) => boolean;
+  showAlert: (message: string, callback?: () => void) => void;
+  showPopup: (params: any, callback?: (id: string) => void) => void;
+  openTelegramLink: (url: string) => void;
 }
 
 declare global {

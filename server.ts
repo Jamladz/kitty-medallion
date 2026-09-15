@@ -50,11 +50,28 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'test_token';
 
 const authenticateTelegram = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const authHeader = req.headers.authorization;
+  const initData = authHeader && authHeader.startsWith('Bearer tma ') ? authHeader.split('Bearer tma ')[1] : '';
+
+  // Allow mock user if we are in local development, or if no Telegram bot token is configured, or if we are accessing outside Telegram context (like dev/preview)
+  const isMockAllowed = process.env.NODE_ENV !== 'production' || BOT_TOKEN === 'test_token' || !initData || initData === 'undefined';
+
+  if (isMockAllowed && (!initData || initData === 'undefined' || !initData.includes('hash='))) {
+    const mockUser = {
+      id: 999999999,
+      first_name: 'Developer',
+      last_name: 'User',
+      username: 'dev_user',
+      language_code: 'en'
+    };
+    (req as any).telegramUser = mockUser;
+    (req as any).userId = '999999999';
+    return next();
+  }
+
   if (!authHeader || !authHeader.startsWith('Bearer tma ')) {
     return res.status(401).json({ error: 'Unauthorized: Missing or invalid token format' });
   }
 
-  const initData = authHeader.split('Bearer tma ')[1];
   const urlParams = new URLSearchParams(initData);
   const hash = urlParams.get('hash');
   
@@ -73,9 +90,8 @@ const authenticateTelegram = async (req: express.Request, res: express.Response,
   const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
   const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
-  if (calculatedHash !== hash && process.env.NODE_ENV !== 'development') {
-    // For local dev without a real Telegram context, we might allow bypassing.
-    // return res.status(401).json({ error: 'Unauthorized: Invalid signature' });
+  if (calculatedHash !== hash && process.env.NODE_ENV !== 'development' && BOT_TOKEN !== 'test_token') {
+    return res.status(401).json({ error: 'Unauthorized: Invalid signature' });
   }
 
   const userStr = urlParams.get('user');

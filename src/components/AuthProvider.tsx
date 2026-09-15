@@ -33,7 +33,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (webApp) {
           webApp.ready();
           webApp.expand();
-          if (webApp.requestFullscreen) {
+          if (webApp.isVersionAtLeast && webApp.isVersionAtLeast('8.0') && webApp.requestFullscreen) {
             try {
               webApp.requestFullscreen();
             } catch (e) {
