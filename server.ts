@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initializeApp, getApps, getApp } from 'firebase-admin/app';
+import { initializeApp, getApps, applicationDefault, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import fs from 'fs';
@@ -14,18 +14,33 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const firebaseConfigPath = path.join(__dirname, 'firebase-applet-config.json');
+const firebaseConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
 let projectId = 'demo-project';
+let databaseId = '(default)';
 if (fs.existsSync(firebaseConfigPath)) {
   const config = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
   projectId = config.projectId;
+  databaseId = config.firestoreDatabaseId || '(default)';
 }
 
 if (!getApps().length) {
-  initializeApp({ projectId });
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+    try {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+      initializeApp({
+        credential: cert(serviceAccount),
+        projectId
+      });
+    } catch (e) {
+      console.error('Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY', e);
+      initializeApp({ credential: applicationDefault(), projectId });
+    }
+  } else {
+    initializeApp({ credential: applicationDefault(), projectId });
+  }
 }
 
-const db = getFirestore();
+const db = getFirestore(databaseId);
 const auth = getAuth();
 const app = express();
 app.use(cors());
@@ -347,7 +362,7 @@ app.get('/api/early-user/status', authenticateTelegram, async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -358,9 +373,9 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, 'client')));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, 'client/index.html'));
+    app.use(express.static(path.join(process.cwd(), 'dist/client')));
+    app.get('*splat', (req, res) => {
+      res.sendFile(path.join(process.cwd(), 'dist/client/index.html'));
     });
   }
 
