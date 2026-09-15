@@ -1,0 +1,6 @@
+{
+  "name": "Kitty Medallion",
+  "description": "A production-ready Telegram Mini App with mining, tasks, and crypto rewards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

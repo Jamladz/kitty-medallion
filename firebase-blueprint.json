@@ -1,0 +1,124 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user in the system.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "username": { "type": "string" },
+        "balanceKitty": { "type": "number" },
+        "balanceUsdt": { "type": "number" },
+        "miningSpeed": { "type": "number" },
+        "referralCount": { "type": "number" },
+        "referrerId": { "type": "string" },
+        "lastMiningClaim": { "type": "number" },
+        "homeScreenAdded": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "A task that can be completed for rewards.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "reward": { "type": "number" },
+        "miningBoost": { "type": "number" },
+        "type": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "title"]
+    },
+    "TaskCompletion": {
+      "title": "Task Completion",
+      "description": "Record of a completed task.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "completedAt": { "type": "number" }
+      },
+      "required": ["userId", "taskId"]
+    },
+    "Swap": {
+      "title": "Swap",
+      "description": "A currency swap record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "amountKitty": { "type": "number" },
+        "amountUsdt": { "type": "number" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["userId", "amountKitty", "amountUsdt"]
+    },
+    "Withdrawal": {
+      "title": "Withdrawal",
+      "description": "A withdrawal request.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "address": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["userId", "address", "amount"]
+    },
+    "EarlyUser": {
+      "title": "Early User",
+      "description": "Record for the first 100 users.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "claimedAt": { "type": "number" }
+      }
+    },
+    "SystemState": {
+      "title": "System State",
+      "description": "Global system state.",
+      "type": "object",
+      "properties": {
+        "earlyUsersCount": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles"
+    },
+    "tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/Task" },
+      "description": "Available tasks"
+    },
+    "users/{userId}/task_completions/{taskId}": {
+      "schema": { "$ref": "#/entities/TaskCompletion" },
+      "description": "Tasks completed by a user"
+    },
+    "swaps/{swapId}": {
+      "schema": { "$ref": "#/entities/Swap" },
+      "description": "Swap history"
+    },
+    "withdrawals/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/Withdrawal" },
+      "description": "Withdrawal history"
+    },
+    "early_users/{userId}": {
+      "schema": { "$ref": "#/entities/EarlyUser" },
+      "description": "Early user claims"
+    },
+    "system/state": {
+      "schema": { "$ref": "#/entities/SystemState" },
+      "description": "Global state"
+    }
+  }
+}
