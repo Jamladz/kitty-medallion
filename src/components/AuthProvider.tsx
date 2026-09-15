@@ -49,10 +49,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           referrerId = startParam.replace('ref_', '');
         }
 
-        const { token } = await api.auth(referrerId);
-        const userCredential = await signInWithCustomToken(auth, token);
+        const authData = await api.auth(referrerId);
+        const userId = authData.user?.id || (webApp?.initDataUnsafe?.user?.id ? String(webApp.initDataUnsafe.user.id) : '999999999');
         
-        unsubscribe = onSnapshot(doc(db, 'users', userCredential.user.uid), (doc) => {
+        unsubscribe = onSnapshot(doc(db, 'users', userId), (doc) => {
           if (doc.exists()) {
             setUser(doc.data());
           }

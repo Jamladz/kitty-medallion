@@ -4,9 +4,7 @@ import dotenv from 'dotenv';
 import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initializeApp, getApps, applicationDefault, cert } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
+import { db, FieldValue } from './server-db';
 import fs from 'fs';
 
 dotenv.config();
@@ -14,34 +12,6 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const firebaseConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
-let projectId = 'demo-project';
-let databaseId = '(default)';
-if (fs.existsSync(firebaseConfigPath)) {
-  const config = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
-  projectId = config.projectId;
-  databaseId = config.firestoreDatabaseId || '(default)';
-}
-
-if (!getApps().length) {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
-    try {
-      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
-      initializeApp({
-        credential: cert(serviceAccount),
-        projectId
-      });
-    } catch (e) {
-      console.error('Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY', e);
-      initializeApp({ credential: applicationDefault(), projectId });
-    }
-  } else {
-    initializeApp({ credential: applicationDefault(), projectId });
-  }
-}
-
-const db = getFirestore(databaseId);
-const auth = getAuth();
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -175,9 +145,8 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
       await claimMining(userId);
     }
     
-    const customToken = await auth.createCustomToken(userId);
     const updatedDoc = await userRef.get();
-    res.json({ token: customToken, user: updatedDoc.data(), isNewUser });
+    res.json({ token: 'mock_token', userId, user: updatedDoc.data(), isNewUser });
   } catch (error) {
     console.error('Auth error:', error);
     res.status(500).json({ error: 'Internal server error' });
