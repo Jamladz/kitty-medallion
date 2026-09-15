@@ -70,13 +70,13 @@ export default function Home() {
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ duration: 0.5, type: 'spring' }}
-        className="mt-8 mb-6 relative"
+        className="mt-8 mb-6 relative select-none"
       >
-        <div className="absolute inset-0 -z-10 animate-pulse rounded-full bg-orange-500/20 blur-xl"></div>
         <img
           src={LOGO_URL}
           alt="Kitty Medallion"
-          className="h-40 w-40 rounded-full border-4 border-orange-500/30 object-cover shadow-[0_0_40px_rgba(249,115,22,0.3)]"
+          referrerPolicy="no-referrer"
+          className="h-40 w-40 object-contain drop-shadow-[0_12px_30px_rgba(249,115,22,0.35)]"
         />
       </motion.div>
 
@@ -88,7 +88,7 @@ export default function Home() {
           <span className="text-4xl font-extrabold tabular-nums tracking-tight text-white">
             {displayBalance.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
           </span>
-          <img src={LOGO_URL} className="h-8 w-8 rounded-full" alt="KITTY" />
+          <img src={LOGO_URL} className="h-8 w-8 rounded-full" alt="KITTY" referrerPolicy="no-referrer" />
         </div>
       </div>
 

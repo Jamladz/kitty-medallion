@@ -55,7 +55,7 @@ export default function WalletPage() {
         <div className="flex-1">
           <span className="text-xs text-gray-400">Kitty Balance</span>
           <div className="mt-1 flex items-center space-x-1 text-lg font-bold text-white">
-            <img src={LOGO_URL} className="h-5 w-5 rounded-full" alt="KITTY" />
+            <img src={LOGO_URL} className="h-5 w-5 rounded-full" alt="KITTY" referrerPolicy="no-referrer" />
             <span>{Math.floor(user?.balanceKitty || 0).toLocaleString()}</span>
           </div>
         </div>
@@ -105,7 +105,7 @@ export default function WalletPage() {
                 className="w-full bg-transparent text-xl font-bold text-white outline-none"
               />
               <div className="flex items-center space-x-1 text-orange-400 font-bold">
-                <img src={LOGO_URL} className="h-5 w-5 rounded-full" alt="KITTY" />
+                <img src={LOGO_URL} className="h-5 w-5 rounded-full" alt="KITTY" referrerPolicy="no-referrer" />
                 <span>KITTY</span>
               </div>
             </div>

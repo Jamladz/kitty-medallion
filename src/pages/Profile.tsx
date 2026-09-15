@@ -12,7 +12,7 @@ export default function Profile() {
 
       <div className="mb-6 flex flex-col items-center">
         {tgUser?.photo_url ? (
-          <img src={tgUser.photo_url} alt="Profile" className="h-24 w-24 rounded-full border-4 border-[#1c1c1c]" />
+          <img src={tgUser.photo_url} alt="Profile" referrerPolicy="no-referrer" className="h-24 w-24 rounded-full border-4 border-[#1c1c1c]" />
         ) : (
           <div className="flex h-24 w-24 items-center justify-center rounded-full bg-[#1c1c1c] text-gray-500">
             <UserIcon size={40} />

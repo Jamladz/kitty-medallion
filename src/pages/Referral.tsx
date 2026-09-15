@@ -37,7 +37,7 @@ export default function Referral() {
             <span className="text-sm text-orange-100">Total Earned</span>
             <span className="text-2xl font-extrabold flex items-center">
               +{(user?.referralCount || 0) * 100}
-              <img src={LOGO_URL} className="ml-1 h-5 w-5 rounded-full" alt="KITTY" />
+              <img src={LOGO_URL} className="ml-1 h-5 w-5 rounded-full" alt="KITTY" referrerPolicy="no-referrer" />
             </span>
           </div>
         </div>
