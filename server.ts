@@ -29,6 +29,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.url} - Host: ${req.headers.host} - Origin: ${req.headers.origin}`);
+  next();
+});
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'test_token';
 
 const authenticateTelegram = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
