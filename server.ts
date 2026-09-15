@@ -4,7 +4,9 @@ import dotenv from 'dotenv';
 import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import admin from 'firebase-admin';
+import { initializeApp, getApps, getApp } from 'firebase-admin/app';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 import fs from 'fs';
 
 dotenv.config();
@@ -19,12 +21,12 @@ if (fs.existsSync(firebaseConfigPath)) {
   projectId = config.projectId;
 }
 
-if (!admin.apps.length) {
-  admin.initializeApp({ projectId });
+if (!getApps().length) {
+  initializeApp({ projectId });
 }
 
-const db = admin.firestore();
-const auth = admin.auth();
+const db = getFirestore();
+const auth = getAuth();
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -131,9 +133,9 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
       if (validReferrer) {
         const refUserRef = db.collection('users').doc(validReferrer);
         batch.update(refUserRef, {
-          balanceKitty: admin.firestore.FieldValue.increment(100),
-          miningSpeed: admin.firestore.FieldValue.increment(50),
-          referralCount: admin.firestore.FieldValue.increment(1)
+          balanceKitty: FieldValue.increment(100),
+          miningSpeed: FieldValue.increment(50),
+          referralCount: FieldValue.increment(1)
         });
       }
       await batch.commit();
@@ -164,7 +166,7 @@ async function claimMining(userId: string) {
     if (daysPassed > 0.001) { // minimum threshold to claim
       const earned = daysPassed * data.miningSpeed;
       transaction.update(userRef, {
-        balanceKitty: admin.firestore.FieldValue.increment(earned),
+        balanceKitty: FieldValue.increment(earned),
         lastMiningClaim: now
       });
     }
@@ -223,8 +225,8 @@ app.post('/api/tasks/claim', authenticateTelegram, async (req, res) => {
       const task = taskDoc.data()!;
       t.set(completionRef, { completedAt: Date.now() });
       t.update(userRef, {
-        balanceKitty: admin.firestore.FieldValue.increment(task.reward || 0),
-        miningSpeed: admin.firestore.FieldValue.increment(task.miningBoost || 0)
+        balanceKitty: FieldValue.increment(task.reward || 0),
+        miningSpeed: FieldValue.increment(task.miningBoost || 0)
       });
       return task;
     });
@@ -255,8 +257,8 @@ app.post('/api/swap', authenticateTelegram, async (req, res) => {
         userId, amountKitty: costKitty, amountUsdt, timestamp: Date.now()
       });
       t.update(userRef, {
-        balanceKitty: admin.firestore.FieldValue.increment(-costKitty),
-        balanceUsdt: admin.firestore.FieldValue.increment(amountUsdt)
+        balanceKitty: FieldValue.increment(-costKitty),
+        balanceUsdt: FieldValue.increment(amountUsdt)
       });
     });
     res.json({ success: true });
@@ -282,7 +284,7 @@ app.post('/api/withdraw', authenticateTelegram, async (req, res) => {
         userId, amount, address, status: 'Pending', timestamp: Date.now()
       });
       t.update(userRef, {
-        balanceUsdt: admin.firestore.FieldValue.increment(-amount)
+        balanceUsdt: FieldValue.increment(-amount)
       });
     });
     res.json({ success: true });
@@ -320,7 +322,7 @@ app.post('/api/early-user/claim', authenticateTelegram, async (req, res) => {
       
       const userRef = db.collection('users').doc(userId);
       t.update(userRef, {
-        balanceKitty: admin.firestore.FieldValue.increment(5000)
+        balanceKitty: FieldValue.increment(5000)
       });
       return count + 1;
     });
@@ -362,7 +364,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
+  app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
