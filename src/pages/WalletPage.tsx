@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useAuth } from '../components/AuthProvider';
 import { api } from '../lib/api';
-import { ArrowRightLeft, ArrowUpRight, DollarSign } from 'lucide-react';
+import { ArrowRightLeft, ArrowUpRight } from 'lucide-react';
 
 const LOGO_URL = 'https://i.suar.me/PpEzN/l';
 const RATE = 10000; // 10k kitty = 1 usdt
+const USDT_LOGO_URL = 'https://i.ibb.co/N2WMd6QC/Tether-USDT.png';
 
 export default function WalletPage() {
   const { user } = useAuth();
@@ -51,20 +52,46 @@ export default function WalletPage() {
     <div className="flex flex-col p-6 h-full">
       <h1 className="mb-6 text-2xl font-bold text-white">Wallet</h1>
 
-      <div className="mb-6 flex space-x-4 rounded-xl bg-[#1c1c1c] p-4 ring-1 ring-white/5">
-        <div className="flex-1">
-          <span className="text-xs text-gray-400">Kitty Balance</span>
-          <div className="mt-1 flex items-center space-x-1 text-lg font-bold text-white">
-            <img src={LOGO_URL} className="h-5 w-5 rounded-full" alt="KITTY" referrerPolicy="no-referrer" />
-            <span>{Math.floor(user?.balanceKitty || 0).toLocaleString()}</span>
+      <div className="mb-6 flex flex-col space-y-2.5">
+        {/* Kitty Medallion Asset Card */}
+        <div className="flex items-center justify-between rounded-xl bg-[#1c1c1c] py-2.5 px-4 border border-white/[0.04] shadow-md">
+          {/* Asset Name & Ticker */}
+          <div className="flex flex-col">
+            <span className="font-bold text-white text-sm leading-tight">Kitty Medallion</span>
+            <span className="text-[9px] font-bold text-gray-500 uppercase mt-0.5 tracking-wider">KITTY</span>
+          </div>
+          {/* Asset Balance */}
+          <div className="flex flex-col items-end">
+            <div className="flex items-center space-x-1.5">
+              <img src={LOGO_URL} className="h-5 w-5 rounded-full object-contain" alt="KITTY" referrerPolicy="no-referrer" />
+              <span className="font-extrabold text-white text-base tabular-nums leading-none">
+                {Math.floor(user?.balanceKitty || 0).toLocaleString()}
+              </span>
+            </div>
+            <span className="text-[10px] text-gray-400 mt-1 font-medium">
+              ≈ {((user?.balanceKitty || 0) / RATE).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT
+            </span>
           </div>
         </div>
-        <div className="w-[1px] bg-white/10" />
-        <div className="flex-1 pl-4">
-          <span className="text-xs text-gray-400">USDT Balance</span>
-          <div className="mt-1 flex items-center space-x-1 text-lg font-bold text-green-400">
-            <DollarSign size={18} />
-            <span>{(user?.balanceUsdt || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+
+        {/* Tether USDT Asset Card */}
+        <div className="flex items-center justify-between rounded-xl bg-[#1c1c1c] py-2.5 px-4 border border-white/[0.04] shadow-md">
+          {/* Asset Name & Ticker */}
+          <div className="flex flex-col">
+            <span className="font-bold text-white text-sm leading-tight">Tether USD</span>
+            <span className="text-[9px] font-bold text-gray-500 uppercase mt-0.5 tracking-wider">USDT</span>
+          </div>
+          {/* Asset Balance */}
+          <div className="flex flex-col items-end">
+            <div className="flex items-center space-x-1.5">
+              <img src={USDT_LOGO_URL} className="h-5 w-5 rounded-full object-contain" alt="USDT" referrerPolicy="no-referrer" />
+              <span className="font-extrabold text-green-400 text-base tabular-nums leading-none">
+                {(user?.balanceUsdt || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            <span className="text-[10px] text-gray-500 mt-1 font-medium">
+              $1.00 Pegged
+            </span>
           </div>
         </div>
       </div>
@@ -126,8 +153,8 @@ export default function WalletPage() {
                 min="0"
                 className="w-full bg-transparent text-xl font-bold text-white outline-none"
               />
-              <div className="flex items-center space-x-1 text-green-400 font-bold">
-                <DollarSign size={20} />
+              <div className="flex items-center space-x-1.5 text-green-400 font-bold">
+                <img src={USDT_LOGO_URL} className="h-5 w-5 rounded-full object-contain" alt="USDT" referrerPolicy="no-referrer" />
                 <span>USDT</span>
               </div>
             </div>
