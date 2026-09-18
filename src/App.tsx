@@ -46,6 +46,11 @@ const AppContent = () => {
     );
   }
 
+  const photoUrl = React.useMemo(() => {
+    const tgUser = typeof window !== 'undefined' && window.Telegram?.WebApp?.initDataUnsafe?.user;
+    return tgUser?.photo_url || null;
+  }, []);
+
   const initials = React.useMemo(() => {
     const tgUser = typeof window !== 'undefined' && window.Telegram?.WebApp?.initDataUnsafe?.user;
     const fName = user?.firstName || tgUser?.first_name || '';
@@ -84,19 +89,27 @@ const AppContent = () => {
             <NavItem to="/wallet" icon={<Wallet size={22} />} label="Wallet" />
           </nav>
 
-          {/* Floating Profile Initials Avatar - Rounded Rectangle matching the height and style perfectly */}
+          {/* Floating Profile Initials Avatar - Perfect circle that loads Telegram photo or falls back to name initials */}
           <NavLink
             to="/profile"
             className={({ isActive }) =>
-              `h-[56px] w-[56px] flex flex-shrink-0 flex-col items-center justify-center rounded-[22px] border text-[12px] font-extrabold uppercase transition-all shadow-[0_12px_40px_rgba(0,0,0,0.7)] backdrop-blur-md ${
+              `h-[56px] w-[56px] flex flex-shrink-0 flex-col items-center justify-center rounded-full border text-[12px] font-extrabold uppercase transition-all overflow-hidden shadow-[0_12px_40px_rgba(0,0,0,0.7)] backdrop-blur-md ${
                 isActive
                   ? 'bg-gradient-to-br from-orange-500 to-orange-600 border-orange-400 text-white scale-105 shadow-lg shadow-orange-500/25'
                   : 'bg-[#161616]/95 border-gray-800 text-gray-400 hover:text-white hover:border-gray-700'
               }`
             }
           >
-            <span className="text-[13px] tracking-wider leading-none">{initials}</span>
-            <span className="text-[10px] font-medium mt-1 opacity-80 leading-none">Me</span>
+            {photoUrl ? (
+              <img
+                src={photoUrl}
+                alt="Profile"
+                referrerPolicy="no-referrer"
+                className="h-full w-full rounded-full object-cover"
+              />
+            ) : (
+              <span className="text-sm font-extrabold tracking-wider leading-none">{initials}</span>
+            )}
           </NavLink>
         </div>
       </div>
