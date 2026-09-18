@@ -46,9 +46,24 @@ const AppContent = () => {
     );
   }
 
+  const initials = React.useMemo(() => {
+    const tgUser = typeof window !== 'undefined' && window.Telegram?.WebApp?.initDataUnsafe?.user;
+    const fName = user?.firstName || tgUser?.first_name || '';
+    const lName = user?.lastName || tgUser?.last_name || '';
+    
+    if (fName && lName) {
+      return (fName[0] + lName[0]).toUpperCase().slice(0, 2);
+    } else if (fName) {
+      return fName.slice(0, 2).toUpperCase();
+    } else if (user?.username) {
+      return user.username.slice(0, 2).toUpperCase();
+    }
+    return 'ME';
+  }, [user]);
+
   return (
     <div className="flex h-screen w-full flex-col bg-[#0f0f0f] text-white">
-      <div className="flex-1 overflow-y-auto pb-20">
+      <div className="flex-1 overflow-y-auto pb-28">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/tasks" element={<Tasks />} />
@@ -59,23 +74,50 @@ const AppContent = () => {
         </Routes>
       </div>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around border-t border-gray-800 bg-[#161616]/90 p-3 pb-safe backdrop-blur-md">
-        <NavItem to="/" icon={<Pickaxe size={24} />} label="Mine" />
-        <NavItem to="/tasks" icon={<CheckSquare size={24} />} label="Tasks" />
-        <NavItem to="/referral" icon={<Users size={24} />} label="Frens" />
-        <NavItem to="/wallet" icon={<Wallet size={24} />} label="Wallet" />
-        <NavItem to="/profile" icon={<UserIcon size={24} />} label="Profile" />
-      </nav>
+      <div className="fixed bottom-5 left-4 right-4 z-50">
+        <div className="mx-auto flex max-w-sm items-center justify-between gap-3">
+          {/* Main Rounded Navigation Bar */}
+          <nav className="flex-1 h-[56px] flex items-center justify-around rounded-[22px] border border-gray-800 bg-[#161616]/95 px-2 shadow-[0_12px_40px_rgba(0,0,0,0.7)] backdrop-blur-md">
+            <NavItem to="/" icon={<Pickaxe size={22} />} label="Mine" />
+            <NavItem to="/tasks" icon={<CheckSquare size={22} />} label="Tasks" />
+            <NavItem to="/referral" icon={<Users size={22} />} label="Frens" />
+            <NavItem to="/wallet" icon={<Wallet size={22} />} label="Wallet" />
+          </nav>
+
+          {/* Floating Profile Initials Avatar - Rounded Rectangle matching the height and style perfectly */}
+          <NavLink
+            to="/profile"
+            className={({ isActive }) =>
+              `h-[56px] w-[56px] flex flex-shrink-0 flex-col items-center justify-center rounded-[22px] border text-[12px] font-extrabold uppercase transition-all shadow-[0_12px_40px_rgba(0,0,0,0.7)] backdrop-blur-md ${
+                isActive
+                  ? 'bg-gradient-to-br from-orange-500 to-orange-600 border-orange-400 text-white scale-105 shadow-lg shadow-orange-500/25'
+                  : 'bg-[#161616]/95 border-gray-800 text-gray-400 hover:text-white hover:border-gray-700'
+              }`
+            }
+          >
+            <span className="text-[13px] tracking-wider leading-none">{initials}</span>
+            <span className="text-[10px] font-medium mt-1 opacity-80 leading-none">Me</span>
+          </NavLink>
+        </div>
+      </div>
     </div>
   );
 };
 
-const NavItem = ({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) => (
+const NavItem = ({ 
+  to, 
+  icon, 
+  label 
+}: { 
+  to: string; 
+  icon: React.ReactNode; 
+  label: string; 
+}) => (
   <NavLink
     to={to}
     className={({ isActive }) =>
-      `flex flex-col items-center justify-center space-y-1 transition-colors ${
-        isActive ? 'text-orange-500' : 'text-gray-500 hover:text-gray-300'
+      `flex flex-col items-center justify-center space-y-1 transition-all ${
+        isActive ? 'text-orange-500 scale-105' : 'text-gray-500 hover:text-gray-300'
       }`
     }
   >
