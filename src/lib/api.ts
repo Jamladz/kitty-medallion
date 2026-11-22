@@ -294,58 +294,20 @@ export const api = {
     }
   },
 
-  bindReferral: async (referrerCode: string) => {
-    const cleaned = String(referrerCode || '').trim().replace(/^(ref_|r_|ref-|invite_)/i, '');
-    if (!/^\d+$/.test(cleaned)) {
-      throw new Error('Please enter a valid numeric referral code or ID');
-    }
+  getBotInfo: async () => {
     try {
-      return await fetchApi('/referrals/bind', {
-        method: 'POST',
-        body: JSON.stringify({ referrerCode: cleaned })
-      });
-    } catch (err: any) {
-      if (err.message && !err.message.includes('HTTP error')) {
-        throw err;
-      }
-      console.warn('API bindReferral failed, using client transaction fallback', err);
-      const userId = getUserId();
-      if (cleaned === userId) {
-        throw new Error('You cannot invite yourself');
-      }
-
-      await runTransaction(db, async (transaction) => {
-        const userRef = doc(db, 'users', userId);
-        const refUserRef = doc(db, 'users', cleaned);
-
-        const userSnap = await transaction.get(userRef);
-        const refSnap = await transaction.get(refUserRef);
-
-        if (!userSnap.exists()) throw new Error('User not found');
-        if (!refSnap.exists()) throw new Error('Inviter ID not found');
-
-        const userData = userSnap.data();
-        if (userData.referrerId) {
-          throw new Error('You have already linked an inviter');
-        }
-        if (refSnap.data().referrerId === userId) {
-          throw new Error('Circular referral is not allowed');
-        }
-
-        transaction.update(userRef, {
-          referrerId: cleaned,
-          referredAt: Date.now(),
-          balanceKitty: increment(100)
-        });
-
-        transaction.update(refUserRef, {
-          balanceKitty: increment(100),
-          miningSpeed: increment(50),
-          referralCount: increment(1)
-        });
-      });
-
-      return { success: true, referrerId: cleaned };
+      return await fetchApi('/bot-info');
+    } catch {
+      return {
+        botUsername:
+          (typeof import.meta !== 'undefined' &&
+            (import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME) ||
+          'KittyMedallion_bot',
+        appShortName:
+          (typeof import.meta !== 'undefined' &&
+            (import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME) ||
+          ''
+      };
     }
   }
 };

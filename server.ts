@@ -137,6 +137,61 @@ const extractReferrerId = (rawParam?: string | null): string | null => {
   return null;
 };
 
+let cachedBotUsername: string | null = process.env.VITE_TELEGRAM_BOT_USERNAME || null;
+
+async function resolveBotUsername(): Promise<string> {
+  if (cachedBotUsername && cachedBotUsername !== 'KittyMedallion_bot') {
+    return cachedBotUsername;
+  }
+  if (BOT_TOKEN && BOT_TOKEN !== 'test_token') {
+    try {
+      const resp = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`);
+      const data = await resp.json();
+      if (data?.ok && data?.result?.username) {
+        cachedBotUsername = data.result.username;
+        return data.result.username;
+      }
+    } catch (e) {
+      console.warn('Could not fetch bot username from Telegram getMe:', e);
+    }
+  }
+  return cachedBotUsername || 'KittyMedallion_bot';
+}
+
+app.get('/api/bot-info', async (_req, res) => {
+  const botUsername = await resolveBotUsername();
+  const appShortName = process.env.VITE_TELEGRAM_APP_SHORT_NAME || '';
+  res.json({ botUsername, appShortName });
+});
+
+// Telegram Bot Webhook receiver so `/start ref_123456` links record pending referral automatically
+app.post('/api/telegram-webhook', async (req, res) => {
+  try {
+    const message = req.body?.message;
+    const text: string = message?.text || '';
+    const fromUser = message?.from;
+
+    if (fromUser?.id && text.startsWith('/start')) {
+      const parts = text.split(/\s+/);
+      const startPayload = parts[1] || '';
+      const inviterId = extractReferrerId(startPayload);
+      const newUserId = String(fromUser.id);
+
+      if (inviterId && inviterId !== newUserId) {
+        await db.collection('pending_referrals').doc(newUserId).set({
+          userId: newUserId,
+          referrerId: inviterId,
+          createdAt: Date.now()
+        });
+      }
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Telegram webhook error:', e);
+    res.json({ ok: true });
+  }
+});
+
 app.post('/api/auth', authenticateTelegram, async (req, res) => {
   const tUser = (req as any).telegramUser;
   const userId = String((req as any).userId);
@@ -153,12 +208,20 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
     ? new URLSearchParams(rawInitData).get('start_param')
     : null;
 
-  const candidateRef =
+  let candidateRef =
     extractReferrerId(bodyReferrerId) ||
     extractReferrerId(bodyStartParam) ||
     extractReferrerId(initDataStartParam);
 
   try {
+    // Check if the user started the bot via `/start ref_ID` webhook before opening the Mini App
+    if (!candidateRef) {
+      const pendingDoc = await db.collection('pending_referrals').doc(userId).get();
+      if (pendingDoc.exists) {
+        candidateRef = extractReferrerId(pendingDoc.data()?.referrerId);
+      }
+    }
+
     const userRef = db.collection('users').doc(userId);
     let isNewUser = false;
     let referralApplied = false;
@@ -170,7 +233,6 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
       if (candidateRef && candidateRef !== userId) {
         const refDoc = await t.get(db.collection('users').doc(candidateRef));
         if (refDoc.exists) {
-          // Prevent circular referral A <-> B
           const refData = refDoc.data();
           if (refData?.referrerId !== userId) {
             validReferrer = candidateRef;
@@ -212,7 +274,7 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
           username: tUser.username || existingData.username || ''
         };
 
-        // If user never had a referrer before and opened an invite link now, credit the referral once
+        // Automatically attribute if user had no inviter yet and entered via referral link
         if (!existingData.referrerId && validReferrer) {
           referralApplied = true;
           profileUpdates.referrerId = validReferrer;

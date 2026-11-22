@@ -73,9 +73,23 @@ export const detectTelegramReferrerId = (): string | undefined => {
     if (!raw) continue;
     const cleaned = String(raw).trim().replace(/^(ref_|r_|ref-|invite_)/i, '');
     if (/^\d+$/.test(cleaned)) {
+      try {
+        sessionStorage.setItem('tg_pending_referrer_id', cleaned);
+        localStorage.setItem('tg_pending_referrer_id', cleaned);
+      } catch {}
       return cleaned;
     }
   }
+
+  // Fallback to cached referrer ID if Telegram router stripped query parameters on reload
+  try {
+    const cached =
+      sessionStorage.getItem('tg_pending_referrer_id') ||
+      localStorage.getItem('tg_pending_referrer_id');
+    if (cached && /^\d+$/.test(cached)) {
+      return cached;
+    }
+  } catch {}
 
   return undefined;
 };

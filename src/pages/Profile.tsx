@@ -140,11 +140,27 @@ export default function Profile() {
   );
   const isCycleReady = now - lastClaim >= CYCLE_DURATION_MS;
 
-  const botUsername =
+  const [botUsername, setBotUsername] = useState(
     (typeof import.meta !== 'undefined' &&
       (import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME) ||
-    'KittyMedallion_bot';
-  const referralLink = `https://t.me/${botUsername}?startapp=ref_${user?.id}`;
+      'KittyMedallion_bot'
+  );
+  const [appShortName, setAppShortName] = useState(
+    (typeof import.meta !== 'undefined' &&
+      (import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME) ||
+      ''
+  );
+
+  useEffect(() => {
+    api.getBotInfo().then((info) => {
+      if (info?.botUsername) setBotUsername(info.botUsername);
+      if (info?.appShortName) setAppShortName(info.appShortName);
+    });
+  }, []);
+
+  const referralLink = appShortName
+    ? `https://t.me/${botUsername}/${appShortName}?startapp=ref_${user?.id}`
+    : `https://t.me/${botUsername}?startapp=ref_${user?.id}`;
 
   const handleCopyId = () => {
     if (!user?.id) return;

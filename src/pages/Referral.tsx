@@ -7,17 +7,15 @@ import {
   Sparkles,
   Users,
   Zap,
-  UserPlus,
-  ShieldCheck,
   Share2,
 } from 'lucide-react';
 
 const LOGO_URL = 'https://i.suar.me/PpEzN/l';
-const BOT_USERNAME =
+const DEFAULT_BOT_USERNAME =
   (typeof import.meta !== 'undefined' &&
     (import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME) ||
   'KittyMedallion_bot';
-const MINI_APP_SHORT_NAME =
+const DEFAULT_SHORT_NAME =
   (typeof import.meta !== 'undefined' &&
     (import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME) ||
   '';
@@ -43,25 +41,26 @@ const getInitials = (firstName?: string, lastName?: string, username?: string) =
 export default function Referral() {
   const { user } = useAuth();
   const [copiedLink, setCopiedLink] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
+  const [botUsername, setBotUsername] = useState(DEFAULT_BOT_USERNAME);
+  const [appShortName, setAppShortName] = useState(DEFAULT_SHORT_NAME);
 
   const [referrals, setReferrals] = useState<ReferredUser[]>([]);
   const [loadingReferrals, setLoadingReferrals] = useState(true);
 
-  const [manualCode, setManualCode] = useState('');
-  const [bindingCode, setBindingCode] = useState(false);
-  const [bindMessage, setBindMessage] = useState<{
-    type: 'success' | 'error';
-    text: string;
-  } | null>(null);
-
   const userId = String(user?.id || '999999999');
   const referralCode = `ref_${userId}`;
 
-  // Official Telegram Mini App Direct Link format
-  const referralLink = MINI_APP_SHORT_NAME
-    ? `https://t.me/${BOT_USERNAME}/${MINI_APP_SHORT_NAME}?startapp=${referralCode}`
-    : `https://t.me/${BOT_USERNAME}?startapp=${referralCode}`;
+  // Official Telegram Mini App Direct Link format (automatically passes start_param on launch)
+  const referralLink = appShortName
+    ? `https://t.me/${botUsername}/${appShortName}?startapp=${referralCode}`
+    : `https://t.me/${botUsername}?startapp=${referralCode}`;
+
+  useEffect(() => {
+    api.getBotInfo().then((info) => {
+      if (info?.botUsername) setBotUsername(info.botUsername);
+      if (info?.appShortName) setAppShortName(info.appShortName);
+    });
+  }, []);
 
   const loadReferrals = async () => {
     setLoadingReferrals(true);
@@ -88,12 +87,6 @@ export default function Referral() {
     window.Telegram?.WebApp?.showAlert?.('Referral link copied to clipboard!');
   };
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(userId);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
-  };
-
   const handleShareTelegram = () => {
     const text =
       'Join Kitty Medallion on Telegram! Start mining every 24h and claim +100 KITTY instant welcome bonus:';
@@ -110,33 +103,6 @@ export default function Referral() {
     }
   };
 
-  const handleBindManualCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!manualCode.trim() || bindingCode) return;
-
-    setBindingCode(true);
-    setBindMessage(null);
-    try {
-      await api.bindReferral(manualCode);
-      setBindMessage({
-        type: 'success',
-        text: 'Inviter linked! +100 KITTY bonus credited to your balance.',
-      });
-      setManualCode('');
-      window.Telegram?.WebApp?.showAlert?.(
-        'Referral code activated! You and your inviter received +100 KITTY.'
-      );
-    } catch (err: any) {
-      setBindMessage({
-        type: 'error',
-        text: err.message || 'Could not apply referral code.',
-      });
-    } finally {
-      setBindingCode(false);
-    }
-  };
-
-  // Use whichever is higher: synced user.referralCount or verified referrals list length
   const effectiveReferralCount = Math.max(
     user?.referralCount || 0,
     referrals.length
@@ -151,7 +117,7 @@ export default function Referral() {
           Invite Frens
         </h1>
         <p className="mt-1 text-xs text-zinc-400">
-          Share your Telegram Mini App link or Invite ID to earn instant KITTY & permanent 24h speed boosts.
+          Share your personal invite link. Referrals are tracked automatically the moment a friend launches the Mini App.
         </p>
       </div>
 
@@ -196,57 +162,30 @@ export default function Referral() {
         </div>
       </div>
 
-      {/* Primary Invite Link & Invite ID Card */}
+      {/* Direct Automatic Invite Link Card */}
       <div className="mb-4 rounded-3xl bg-[#141419] p-4 border border-white/[0.06] space-y-3 shadow-xl">
-        <div className="flex items-center justify-between rounded-2xl bg-[#0b0b0e] px-3.5 py-2.5 border border-white/[0.05]">
+        <div className="flex items-center justify-between rounded-2xl bg-[#0b0b0e] px-3.5 py-3 border border-white/[0.05]">
           <div className="min-w-0 pr-2">
             <span className="block text-[10px] font-medium text-zinc-500">
-              Your Direct Invite Link
+              Your Automatic Invite Link
             </span>
-            <span className="block font-mono text-xs text-zinc-200 truncate">
+            <span className="block font-mono text-xs text-zinc-200 truncate mt-0.5">
               {referralLink}
             </span>
           </div>
           <button
             onClick={handleCopyLink}
-            className="shrink-0 flex items-center space-x-1 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] active:scale-95 px-3 py-2 text-xs font-semibold text-white transition-all"
+            className="shrink-0 flex items-center space-x-1.5 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] active:scale-95 px-3 py-2 text-xs font-semibold text-white transition-all"
           >
             {copiedLink ? (
               <>
-                <Check size={13} className="text-emerald-400" />
+                <Check size={14} className="text-emerald-400" />
                 <span>Copied</span>
               </>
             ) : (
               <>
-                <Copy size={13} className="text-zinc-300" />
+                <Copy size={14} className="text-zinc-300" />
                 <span>Copy</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        <div className="flex items-center justify-between rounded-2xl bg-[#0b0b0e] px-3.5 py-2.5 border border-white/[0.05]">
-          <div>
-            <span className="block text-[10px] font-medium text-zinc-500">
-              Your Invite Code (Telegram ID)
-            </span>
-            <span className="font-mono text-xs font-bold tabular-nums text-amber-400">
-              {userId}
-            </span>
-          </div>
-          <button
-            onClick={handleCopyCode}
-            className="shrink-0 flex items-center space-x-1 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] active:scale-95 px-3 py-2 text-xs font-semibold text-white transition-all"
-          >
-            {copiedCode ? (
-              <>
-                <Check size={13} className="text-emerald-400" />
-                <span>Copied ID</span>
-              </>
-            ) : (
-              <>
-                <Copy size={13} className="text-zinc-300" />
-                <span>Copy ID</span>
               </>
             )}
           </button>
@@ -257,74 +196,14 @@ export default function Referral() {
           className="flex w-full items-center justify-center space-x-2 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 active:scale-[0.98] py-3.5 text-sm font-bold text-zinc-950 transition-all shadow-lg shadow-orange-500/20"
         >
           <Share2 size={17} />
-          <span>Share Invite on Telegram</span>
+          <span>Invite Friends on Telegram</span>
         </button>
       </div>
-
-      {/* Manual Referral Code Claim (If user has not linked an inviter yet) */}
-      {!user?.referrerId ? (
-        <form
-          onSubmit={handleBindManualCode}
-          className="mb-4 rounded-3xl bg-[#141419] p-4 border border-white/[0.06] shadow-xl"
-        >
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center space-x-2">
-              <UserPlus size={15} className="text-amber-400" />
-              <span className="font-display text-xs font-bold text-white">
-                Were you invited by a friend?
-              </span>
-            </div>
-            <span className="font-mono text-[11px] font-semibold text-emerald-400">
-              +100 KITTY Bonus
-            </span>
-          </div>
-          <p className="text-[11px] text-zinc-400 mb-3">
-            Enter your friend&apos;s Invite ID if your link didn&apos;t auto-apply.
-          </p>
-
-          <div className="flex items-center space-x-2">
-            <input
-              type="text"
-              value={manualCode}
-              onChange={(e) => setManualCode(e.target.value)}
-              placeholder="Enter Inviter ID (e.g. 123456789)"
-              className="flex-1 rounded-2xl bg-[#0b0b0e] px-3.5 py-2.5 font-mono text-xs text-white outline-none border border-white/[0.06] focus:border-amber-500/50"
-            />
-            <button
-              type="submit"
-              disabled={bindingCode || !manualCode.trim()}
-              className="shrink-0 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 disabled:opacity-40 px-4 py-2.5 text-xs font-bold text-zinc-950 transition-all"
-            >
-              {bindingCode ? 'Linking...' : 'Claim'}
-            </button>
-          </div>
-
-          {bindMessage && (
-            <p
-              className={`mt-2 text-xs font-medium ${
-                bindMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'
-              }`}
-            >
-              {bindMessage.text}
-            </p>
-          )}
-        </form>
-      ) : (
-        <div className="mb-4 flex items-center justify-between rounded-2xl bg-[#141419] px-4 py-3 border border-emerald-500/20">
-          <div className="flex items-center space-x-2 text-xs text-emerald-400">
-            <ShieldCheck size={16} />
-            <span className="font-medium">Invited by Friend</span>
-          </div>
-          <span className="font-mono text-xs font-semibold tabular-nums text-zinc-300">
-            ID #{user.referrerId}
-          </span>
-        </div>
-      )}
 
       {/* Reward Tier Benefits */}
       <div className="mb-4 rounded-3xl bg-[#141419] p-4 border border-white/[0.06] space-y-3">
         <h2 className="font-display text-xs font-bold text-zinc-300">
-          Dual Rewards Per Invited Friend
+          Automatic Rewards Per Invited Friend
         </h2>
 
         <div className="flex items-center justify-between py-1 border-b border-white/[0.05] pb-3">
@@ -340,7 +219,7 @@ export default function Referral() {
                 Instant Medallion Bonus
               </span>
               <span className="text-[11px] text-zinc-400">
-                Both you & your friend receive +100 KITTY
+                Credited automatically to you & your friend on join
               </span>
             </div>
           </div>
@@ -375,15 +254,15 @@ export default function Referral() {
           <div className="flex items-center space-x-2">
             <Users size={15} className="text-amber-400" />
             <span className="font-display text-xs font-bold text-white">
-              Invited Friends List ({referrals.length})
+              Invited Friends ({referrals.length})
             </span>
           </div>
-          <span className="text-[11px] text-zinc-500">Live Sync</span>
+          <span className="text-[11px] text-zinc-500">Auto-Synced</span>
         </div>
 
         {loadingReferrals ? (
           <div className="py-5 text-center text-xs text-zinc-500">
-            Syncing invited friends...
+            Loading invited friends...
           </div>
         ) : referrals.length === 0 ? (
           <div className="rounded-2xl bg-[#0b0b0e]/70 p-4 text-center border border-white/[0.04]">
@@ -391,7 +270,7 @@ export default function Referral() {
               No friends have joined through your link yet.
             </p>
             <p className="mt-1 text-[11px] text-zinc-500">
-              Share your link or Invite ID ({userId}) above to start earning!
+              Share your link above — as soon as a friend opens the app, your reward is added automatically!
             </p>
           </div>
         ) : (
