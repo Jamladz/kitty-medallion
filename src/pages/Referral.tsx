@@ -1,79 +1,138 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../components/AuthProvider';
-import { Copy, Gift, Users } from 'lucide-react';
+import { Copy, Check, Sparkles, Users, Zap } from 'lucide-react';
 
 const LOGO_URL = 'https://i.suar.me/PpEzN/l';
 
 export default function Referral() {
   const { user } = useAuth();
-  
-  // Create a real Telegram Bot start URL with startapp parameter
-  const botUsername = 'KittyMedallion_bot'; // Replace with actual bot username when deployed
+  const [copied, setCopied] = useState(false);
+
+  const botUsername = 'KittyMedallion_bot';
   const referralLink = `https://t.me/${botUsername}?startapp=ref_${user?.id}`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(referralLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
     window.Telegram?.WebApp?.showAlert('Referral link copied to clipboard!');
   };
 
   const handleShare = () => {
-    const text = 'Join Kitty Medallion and start mining with me! 🐱🪙';
-    window.Telegram?.WebApp?.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent(text)}`);
+    const text = 'Join Kitty Medallion and start mining with me!';
+    window.Telegram?.WebApp?.openTelegramLink(
+      `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent(text)}`
+    );
   };
 
-  return (
-    <div className="flex flex-col p-6">
-      <h1 className="mb-2 text-2xl font-bold text-white">Referrals</h1>
-      <p className="mb-6 text-sm text-gray-400">Invite friends to earn massive rewards and mining boosts.</p>
+  const referralCount = user?.referralCount || 0;
+  const totalEarned = referralCount * 100;
 
-      <div className="mb-6 rounded-3xl bg-gradient-to-br from-orange-500 to-pink-500 p-6 text-white shadow-xl">
-        <h2 className="text-xl font-bold mb-4">Your Referral Stats</h2>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col rounded-2xl bg-white/10 p-4 backdrop-blur-md">
-            <span className="text-sm text-orange-100">Total Referrals</span>
-            <span className="text-3xl font-extrabold">{user?.referralCount || 0}</span>
-          </div>
-          <div className="flex flex-col rounded-2xl bg-white/10 p-4 backdrop-blur-md">
-            <span className="text-sm text-orange-100">Total Earned</span>
-            <span className="text-2xl font-extrabold flex items-center">
-              +{(user?.referralCount || 0) * 100}
-              <img src={LOGO_URL} className="ml-1 h-5 w-5 rounded-full" alt="KITTY" referrerPolicy="no-referrer" />
+  return (
+    <div className="flex flex-col px-5 pt-6 pb-8">
+      <div className="mb-6">
+        <h1 className="font-display text-2xl font-bold tracking-tight text-white">
+          Invite Frens
+        </h1>
+        <p className="mt-1 text-xs text-zinc-400">
+          Grow your mining network and earn permanent hashrate multipliers.
+        </p>
+      </div>
+
+      {/* Referral KPI Summary Card */}
+      <div className="mb-5 rounded-3xl bg-gradient-to-br from-amber-500/20 via-orange-500/10 to-[#141419] p-5 border border-amber-500/25 shadow-xl">
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-xs font-semibold text-amber-200/90">
+            Network Performance
+          </span>
+          <Sparkles size={16} className="text-amber-400" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col rounded-2xl bg-[#0b0b0e]/75 p-4 border border-white/[0.06]">
+            <span className="text-xs text-zinc-400">Invited Frens</span>
+            <span className="mt-1.5 font-display text-2xl font-extrabold tabular-nums text-white">
+              {referralCount.toLocaleString()}
             </span>
           </div>
+
+          <div className="flex flex-col rounded-2xl bg-[#0b0b0e]/75 p-4 border border-white/[0.06]">
+            <span className="text-xs text-zinc-400">Bonus Earned</span>
+            <div className="mt-1.5 flex items-center space-x-1.5">
+              <img
+                src={LOGO_URL}
+                className="h-5 w-5 rounded-full object-contain"
+                alt="KITTY"
+                referrerPolicy="no-referrer"
+              />
+              <span className="font-display text-2xl font-extrabold tabular-nums text-amber-400">
+                +{totalEarned.toLocaleString()}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="mb-8 rounded-2xl bg-[#1c1c1c] p-5 ring-1 ring-white/5">
-        <div className="mb-4 flex items-center space-x-3 text-orange-400">
-          <Gift size={24} />
-          <span className="font-bold text-white">Referral Bonus</span>
+      {/* Reward Tier Benefits */}
+      <div className="mb-6 rounded-3xl bg-[#141419] p-5 border border-white/[0.06] space-y-4">
+        <h2 className="font-display text-sm font-bold text-white">
+          Reward Per Invited Friend
+        </h2>
+
+        <div className="flex items-center justify-between py-1 border-b border-white/[0.05] pb-3.5">
+          <div className="flex items-center space-x-3">
+            <img
+              src={LOGO_URL}
+              className="h-8 w-8 rounded-full object-contain"
+              alt="KITTY"
+              referrerPolicy="no-referrer"
+            />
+            <div>
+              <span className="block text-sm font-semibold text-white">
+                Instant Medallion Drop
+              </span>
+              <span className="text-xs text-zinc-400">Credited immediately on join</span>
+            </div>
+          </div>
+          <span className="font-mono text-sm font-bold tabular-nums text-amber-400">
+            +100 KITTY
+          </span>
         </div>
-        <ul className="space-y-3 text-sm text-gray-300">
-          <li className="flex items-center space-x-2">
-            <div className="h-1.5 w-1.5 rounded-full bg-orange-500" />
-            <span><strong className="text-white">100 KITTY</strong> instant reward per friend</span>
-          </li>
-          <li className="flex items-center space-x-2">
-            <div className="h-1.5 w-1.5 rounded-full bg-orange-500" />
-            <span><strong className="text-white">+50 Hash/day</strong> permanent mining boost</span>
-          </li>
-        </ul>
+
+        <div className="flex items-center justify-between pt-0.5">
+          <div className="flex items-center space-x-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <Zap size={16} />
+            </div>
+            <div>
+              <span className="block text-sm font-semibold text-white">
+                Permanent Speed Boost
+              </span>
+              <span className="text-xs text-zinc-400">Added to daily cloud yield</span>
+            </div>
+          </div>
+          <span className="font-mono text-sm font-bold tabular-nums text-emerald-400">
+            +50 /day
+          </span>
+        </div>
       </div>
 
+      {/* Action Buttons */}
       <div className="flex flex-col space-y-3 mt-auto">
         <button
           onClick={handleShare}
-          className="flex w-full items-center justify-center space-x-2 rounded-xl bg-white py-4 font-bold text-black hover:bg-gray-200"
+          className="flex w-full items-center justify-center space-x-2 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 active:scale-[0.98] py-4 text-sm font-bold text-zinc-950 transition-all shadow-lg shadow-orange-500/20"
         >
-          <Users size={20} />
-          <span>Invite Friends</span>
+          <Users size={18} />
+          <span>Invite Friends on Telegram</span>
         </button>
+
         <button
           onClick={handleCopy}
-          className="flex w-full items-center justify-center space-x-2 rounded-xl bg-[#2a2a2a] py-4 font-bold text-white hover:bg-[#3a3a3a]"
+          className="flex w-full items-center justify-center space-x-2 rounded-2xl bg-[#141419] hover:bg-[#1c1c24] active:scale-[0.98] py-4 text-sm font-semibold text-white border border-white/[0.08] transition-all"
         >
-          <Copy size={20} />
-          <span>Copy Link</span>
+          {copied ? <Check size={18} className="text-emerald-400" /> : <Copy size={18} className="text-zinc-400" />}
+          <span>{copied ? 'Referral Link Copied' : 'Copy Invite Link'}</span>
         </button>
       </div>
     </div>

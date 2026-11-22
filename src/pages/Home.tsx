@@ -2,9 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../components/AuthProvider';
 import { motion } from 'framer-motion';
 import { api } from '../lib/api';
-import { Gift, ShieldCheck } from 'lucide-react';
+import { Gift, ShieldCheck, Zap, Users, Sparkles } from 'lucide-react';
 
 const LOGO_URL = 'https://i.suar.me/PpEzN/l';
+const USDT_LOGO_URL = 'https://i.ibb.co/N2WMd6QC/Tether-USDT.png';
+const RATE = 10000;
 
 export default function Home() {
   const { user, refreshMining } = useAuth();
@@ -13,7 +15,7 @@ export default function Home() {
   const [isEarlyClaimed, setIsEarlyClaimed] = useState(true);
   const [loadingClaim, setLoadingClaim] = useState(false);
 
-  // Animate balance
+  // Smooth live balance ticker
   useEffect(() => {
     let animationFrame: number;
     let lastUpdate = Date.now();
@@ -64,91 +66,180 @@ export default function Home() {
     setLoadingClaim(false);
   };
 
+  const miningSpeed = user?.miningSpeed || 500;
+  const referralBonus = Math.max(0, miningSpeed - 500);
+  const usdtEquivalent = displayBalance / RATE;
+
   return (
-    <div className="flex min-h-full flex-col items-center p-6 pb-24">
-      <motion.div
-        initial={{ scale: 0.8, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ duration: 0.5, type: 'spring' }}
-        className="mt-8 mb-6 relative select-none"
-      >
-        <img
-          src={LOGO_URL}
-          alt="Kitty Medallion"
-          referrerPolicy="no-referrer"
-          className="h-40 w-40 object-contain drop-shadow-[0_12px_30px_rgba(249,115,22,0.35)]"
-        />
-      </motion.div>
-
-      <div className="mb-8 text-center">
-        <h2 className="mb-1 text-sm font-semibold uppercase tracking-widest text-gray-400">
-          Kitty Balance
-        </h2>
-        <div className="flex items-center justify-center space-x-2">
-          <span className="text-4xl font-extrabold tabular-nums tracking-tight text-white">
-            {displayBalance.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
-          </span>
-          <img src={LOGO_URL} className="h-8 w-8 rounded-full" alt="KITTY" referrerPolicy="no-referrer" />
-        </div>
-      </div>
-
-      <div className="w-full max-w-sm rounded-2xl bg-[#1c1c1c] p-4 shadow-lg ring-1 ring-white/5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-2">
-            <PickaxeIcon className="text-orange-500" />
-            <span className="text-sm font-medium text-gray-300">Mining Speed</span>
-          </div>
-          <span className="text-lg font-bold text-orange-400">
-            {user?.miningSpeed || 500} <span className="text-xs text-gray-500">/day</span>
+    <div className="flex min-h-full flex-col items-center px-5 pt-6 pb-8">
+      {/* Top Compact Status Strip */}
+      <div className="w-full flex items-center justify-between mb-6">
+        <div className="flex items-center space-x-2">
+          <img
+            src={LOGO_URL}
+            alt="Kitty Medallion"
+            referrerPolicy="no-referrer"
+            className="h-6 w-6 rounded-full object-contain"
+          />
+          <span className="font-display text-sm font-bold tracking-tight text-white">
+            Kitty Medallion
           </span>
         </div>
 
-        <div className="flex flex-col space-y-3">
-          <div className="flex justify-between text-xs text-gray-400">
-            <span>Base Rate</span>
-            <span>500 KITTY/day</span>
-          </div>
-          <div className="flex justify-between text-xs text-gray-400">
-            <span>Referral Bonus</span>
-            <span className="text-green-400">+{((user?.miningSpeed || 500) - 500).toLocaleString()} KITTY/day</span>
-          </div>
+        <div className="flex items-center space-x-1.5 text-xs font-medium text-zinc-400">
+          <img
+            src={USDT_LOGO_URL}
+            alt="USDT"
+            referrerPolicy="no-referrer"
+            className="h-4 w-4 rounded-full object-contain"
+          />
+          <span className="font-mono tabular-nums text-emerald-400 font-semibold">
+            ≈ {usdtEquivalent.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+          <span className="text-zinc-500">USDT</span>
         </div>
       </div>
 
-      {!isEarlyClaimed && earlyCount < 100 && (
-        <div className="mt-6 w-full max-w-sm rounded-2xl bg-gradient-to-r from-orange-500/20 to-pink-500/20 p-4 ring-1 ring-orange-500/50">
-          <div className="flex items-center space-x-3 mb-3">
-            <div className="rounded-full bg-orange-500 p-2 text-white">
-              <Gift size={20} />
+      {/* Central Medallion Showcase with Pedestal Halo */}
+      <div className="relative my-3 flex items-center justify-center">
+        {/* Ambient golden back-glow */}
+        <div className="pointer-events-none absolute h-48 w-48 rounded-full bg-gradient-to-tr from-amber-500/20 via-orange-500/15 to-transparent blur-2xl" />
+        {/* Concentric subtle orbital ring */}
+        <div className="pointer-events-none absolute h-44 w-44 rounded-full border border-amber-500/15" />
+        <div className="pointer-events-none absolute h-52 w-52 rounded-full border border-white/[0.04]" />
+
+        <motion.div
+          initial={{ scale: 0.88, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.45, type: 'spring', stiffness: 200 }}
+          whileTap={{ scale: 0.95 }}
+          className="relative z-10 cursor-pointer select-none p-3"
+        >
+          <img
+            src={LOGO_URL}
+            alt="Kitty Medallion"
+            referrerPolicy="no-referrer"
+            className="h-36 w-36 object-contain drop-shadow-[0_16px_36px_rgba(245,158,11,0.38)]"
+          />
+        </motion.div>
+      </div>
+
+      {/* Live Mined Balance Readout */}
+      <div className="mt-3 mb-7 text-center">
+        <p className="mb-1.5 text-xs font-medium text-zinc-400">
+          Total Mined Balance
+        </p>
+        <div className="flex items-center justify-center space-x-2.5">
+          <img
+            src={LOGO_URL}
+            className="h-7 w-7 rounded-full object-contain"
+            alt="KITTY"
+            referrerPolicy="no-referrer"
+          />
+          <span className="font-display text-4xl font-extrabold tabular-nums tracking-tight text-white">
+            {displayBalance.toLocaleString(undefined, {
+              minimumFractionDigits: 4,
+              maximumFractionDigits: 4,
+            })}
+          </span>
+        </div>
+      </div>
+
+      {/* Mining Performance Card */}
+      <div className="w-full rounded-3xl bg-[#141419] p-5 border border-white/[0.06] shadow-xl">
+        <div className="flex items-center justify-between pb-4 border-b border-white/[0.06]">
+          <div className="flex items-center space-x-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              <Zap size={19} />
             </div>
             <div>
-              <h3 className="font-bold text-white text-sm">Early Supporter Gift</h3>
-              <p className="text-xs text-orange-200">{100 - earlyCount} spots remaining</p>
+              <span className="block text-sm font-bold text-white">Active Hashrate</span>
+              <span className="text-xs text-zinc-400">Continuous cloud yield</span>
             </div>
+          </div>
+          <div className="text-right">
+            <div className="flex items-center justify-end space-x-1">
+              <img
+                src={LOGO_URL}
+                className="h-4 w-4 rounded-full object-contain"
+                alt="KITTY"
+                referrerPolicy="no-referrer"
+              />
+              <span className="font-mono text-lg font-bold tabular-nums text-amber-400">
+                +{miningSpeed.toLocaleString()}
+              </span>
+            </div>
+            <span className="text-[11px] font-medium text-zinc-500">KITTY / day</span>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="rounded-2xl bg-[#0b0b0e]/70 p-3.5 border border-white/[0.04]">
+            <span className="text-[11px] font-medium text-zinc-400">Base Output</span>
+            <div className="mt-1 flex items-center space-x-1">
+              <img
+                src={LOGO_URL}
+                className="h-3.5 w-3.5 rounded-full object-contain"
+                alt="KITTY"
+                referrerPolicy="no-referrer"
+              />
+              <span className="font-mono text-sm font-bold tabular-nums text-white">
+                500
+              </span>
+              <span className="text-[11px] text-zinc-500">/day</span>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-[#0b0b0e]/70 p-3.5 border border-white/[0.04]">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium text-zinc-400">Frens Boost</span>
+              <Users size={12} className="text-emerald-400" />
+            </div>
+            <div className="mt-1 flex items-center space-x-1">
+              <span className="font-mono text-sm font-bold tabular-nums text-emerald-400">
+                +{referralBonus.toLocaleString()}
+              </span>
+              <span className="text-[11px] text-zinc-500">/day</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Early Supporter Claim Card */}
+      {!isEarlyClaimed && earlyCount < 100 && (
+        <div className="mt-5 w-full rounded-3xl bg-gradient-to-br from-amber-500/15 via-orange-500/10 to-[#141419] p-5 border border-amber-500/30 shadow-xl">
+          <div className="flex items-center justify-between mb-3.5">
+            <div className="flex items-center space-x-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/20">
+                <Gift size={20} />
+              </div>
+              <div>
+                <h3 className="font-display font-bold text-white text-sm">
+                  Early Pioneer Grant
+                </h3>
+                <p className="text-xs text-amber-200/80">
+                  {100 - earlyCount} of 100 allocations left
+                </p>
+              </div>
+            </div>
+            <Sparkles size={18} className="text-amber-400" />
           </div>
           <button
             onClick={handleClaimEarly}
             disabled={loadingClaim}
-            className="w-full rounded-xl bg-orange-500 py-3 text-sm font-bold text-white hover:bg-orange-600 disabled:opacity-50"
+            className="w-full rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 py-3.5 text-sm font-bold text-zinc-950 hover:from-amber-400 hover:to-orange-400 active:scale-[0.98] transition-all disabled:opacity-50 shadow-lg shadow-orange-500/20"
           >
-            {loadingClaim ? 'Claiming...' : 'Claim 5,000 KITTY'}
+            {loadingClaim ? 'Claiming Grant...' : 'Claim 5,000 KITTY'}
           </button>
         </div>
       )}
-      
+
       {isEarlyClaimed && earlyCount <= 100 && (
-        <div className="mt-6 flex items-center space-x-2 rounded-full bg-green-500/10 px-4 py-2 text-xs font-medium text-green-400">
-          <ShieldCheck size={16} />
-          <span>Early Supporter Status Active</span>
+        <div className="mt-5 flex items-center space-x-2 text-xs font-medium text-emerald-400/90">
+          <ShieldCheck size={15} />
+          <span>Early Pioneer Grant Activated</span>
         </div>
       )}
     </div>
   );
 }
-
-const PickaxeIcon = ({ className }: { className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M14.531 12.469 11.5 15.5m-3-3L14.5 15.5m-6-6-3-3a1.06 1.06 0 0 1 1.5-1.5l3 3m5 5 5 5a1.06 1.06 0 0 1-1.5 1.5l-5-5"/>
-    <path d="M16 14.5 14.5 16l-7-7L6 7.5l1.5-1.5 7 7Z"/>
-  </svg>
-);

@@ -1,18 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { useAuth } from '../components/AuthProvider';
 import { api } from '../lib/api';
-import { Check, CheckCircle2, ChevronRight, Home, PlaySquare, Share2, Smartphone, Plus } from 'lucide-react';
+import { CheckCircle2, ChevronRight, PlaySquare, Share2, Smartphone, Plus } from 'lucide-react';
 
 const LOGO_URL = 'https://i.suar.me/PpEzN/l';
 
 export default function Tasks() {
-  const { user } = useAuth();
   const [tasks, setTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [claiming, setClaiming] = useState<string | null>(null);
 
-  const [isHomeScreenSupported, setIsHomeScreenSupported] = useState(false);
-  const [homeScreenStatus, setHomeScreenStatus] = useState<'added' | 'not-added' | 'unknown'>('unknown');
+  const [, setIsHomeScreenSupported] = useState(false);
+  const [, setHomeScreenStatus] = useState<'added' | 'not-added' | 'unknown'>('unknown');
 
   useEffect(() => {
     fetchTasks();
@@ -36,46 +34,46 @@ export default function Tasks() {
       if (webApp && typeof webApp.addToHomeScreen === 'function') {
         try {
           webApp.addToHomeScreen();
-          // Start the reward claim process
           claimReward(task.id);
         } catch (err) {
           console.error('Error with addToHomeScreen:', err);
           claimReward(task.id);
         }
       } else {
-        // Fallback for dev / desktop testing
         claimReward(task.id);
       }
       return;
     }
 
     if (task.type === 'monetag') {
-      // Simulate Monetag ad SDK call
       const webApp = window.Telegram?.WebApp;
-      webApp?.showPopup({
-        title: 'Watch Ad',
-        message: 'This will open a Monetag ad. Continue?',
-        buttons: [{ type: 'ok' }, { type: 'cancel' }]
-      }, (btnId) => {
-        if (btnId === 'ok') {
-          // Mock ad duration
-          setClaiming(task.id);
-          setTimeout(() => {
-            claimReward(task.id);
-          }, 3000);
+      webApp?.showPopup(
+        {
+          title: 'Watch Ad',
+          message: 'This will open a Monetag ad. Continue?',
+          buttons: [{ type: 'ok' }, { type: 'cancel' }],
+        },
+        (btnId) => {
+          if (btnId === 'ok') {
+            setClaiming(task.id);
+            setTimeout(() => {
+              claimReward(task.id);
+            }, 3000);
+          }
         }
-      });
+      );
       return;
     }
 
     if (task.type === 'social') {
       const webApp = window.Telegram?.WebApp;
       webApp?.openTelegramLink('https://t.me/durov');
-      setTimeout(() => { claimReward(task.id); }, 2000);
+      setTimeout(() => {
+        claimReward(task.id);
+      }, 2000);
       return;
     }
-    
-    // Direct claim
+
     await claimReward(task.id);
   };
 
@@ -83,7 +81,9 @@ export default function Tasks() {
     setClaiming(taskId);
     try {
       await api.claimTask(taskId);
-      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, isCompleted: true } : t));
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, isCompleted: true } : t))
+      );
     } catch (e: any) {
       window.Telegram?.WebApp?.showAlert(e.message || 'Failed to claim task');
     }
@@ -93,10 +93,10 @@ export default function Tasks() {
   useEffect(() => {
     if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
       const tg = window.Telegram.WebApp;
-      
+
       if (typeof tg.addToHomeScreen === 'function') {
         setIsHomeScreenSupported(true);
-        
+
         if (typeof tg.checkHomeScreenStatus === 'function') {
           try {
             tg.checkHomeScreenStatus((status: 'added' | 'not-added' | 'unknown') => {
@@ -117,9 +117,9 @@ export default function Tasks() {
       const handleAdded = () => {
         setHomeScreenStatus('added');
         if (tg.showAlert) {
-          tg.showAlert('Kitty Medallion has been added to your Home Screen! 🎉');
+          tg.showAlert('Kitty Medallion has been added to your Home Screen!');
         }
-        const hsTask = tasks.find(t => t.type === 'home_screen');
+        const hsTask = tasks.find((t) => t.type === 'home_screen');
         if (hsTask && !hsTask.isCompleted) {
           claimReward(hsTask.id);
         }
@@ -129,7 +129,7 @@ export default function Tasks() {
         if (payload && payload.status) {
           setHomeScreenStatus(payload.status);
           if (payload.status === 'added') {
-            const hsTask = tasks.find(t => t.type === 'home_screen');
+            const hsTask = tasks.find((t) => t.type === 'home_screen');
             if (hsTask && !hsTask.isCompleted) {
               claimReward(hsTask.id);
             }
@@ -159,74 +159,89 @@ export default function Tasks() {
     }
   }, [tasks]);
 
-  const handleAddToHomeScreen = () => {
-    if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
-      const tg = window.Telegram.WebApp;
-      if (typeof tg.addToHomeScreen === 'function') {
-        try {
-          tg.addToHomeScreen();
-        } catch (e) {
-          console.error('Error calling addToHomeScreen:', e);
-          if (tg.showAlert) {
-            tg.showAlert('Unable to prompt. Make sure your Telegram app is updated.');
-          }
-        }
-      } else {
-        if (tg.showAlert) {
-          tg.showAlert('Your version of Telegram does not support direct Home Screen shortcuts. Please update Telegram.');
-        }
-      }
-    } else {
-      alert('Please open this app inside Telegram to add the shortcut.');
-    }
-  };
-
   if (loading) {
-    return <div className="p-6 pt-12 text-center text-gray-500">Loading tasks...</div>;
+    return (
+      <div className="flex flex-col px-5 pt-6 space-y-3">
+        <div className="h-7 w-28 rounded-lg bg-white/5 animate-pulse" />
+        <div className="h-4 w-64 rounded-lg bg-white/5 animate-pulse mb-4" />
+        {[1, 2, 3].map((n) => (
+          <div key={n} className="h-20 w-full rounded-2xl bg-[#141419] border border-white/[0.04] animate-pulse" />
+        ))}
+      </div>
+    );
   }
 
+  const completedCount = tasks.filter((t) => t.isCompleted).length;
+
   return (
-    <div className="flex flex-col p-6">
-      <h1 className="mb-2 text-2xl font-bold text-white">Tasks</h1>
-      <p className="mb-6 text-sm text-gray-400">Complete tasks to earn Kitty Medallions and boost your mining speed.</p>
+    <div className="flex flex-col px-5 pt-6 pb-8">
+      {/* Header & Progress Summary */}
+      <div className="mb-6 flex items-end justify-between">
+        <div>
+          <h1 className="font-display text-2xl font-bold tracking-tight text-white">
+            Missions
+          </h1>
+          <p className="mt-1 text-xs text-zinc-400">
+            Complete quests to earn medallions and boost daily yield.
+          </p>
+        </div>
+        {tasks.length > 0 && (
+          <div className="text-right">
+            <span className="font-mono text-xs font-semibold tabular-nums text-amber-400">
+              {completedCount}/{tasks.length}
+            </span>
+            <span className="block text-[10px] text-zinc-500">Completed</span>
+          </div>
+        )}
+      </div>
 
       <div className="flex flex-col space-y-3">
         {tasks.map((task) => {
           const isHomeScreen = task.type === 'home_screen';
-          
+
           if (isHomeScreen) {
             return (
               <div
                 key={task.id}
-                className={`flex flex-col rounded-2xl p-5 ring-1 transition-all ${
+                className={`flex flex-col rounded-3xl p-5 border transition-all ${
                   task.isCompleted
-                    ? 'bg-[#1c1c1c]/50 ring-green-500/10'
-                    : 'bg-gradient-to-br from-indigo-950/40 to-slate-900/40 ring-indigo-500/25 shadow-xl shadow-indigo-950/20'
+                    ? 'bg-[#141419]/60 border-emerald-500/20'
+                    : 'bg-gradient-to-br from-amber-500/12 via-[#141419] to-[#141419] border-amber-500/25 shadow-xl'
                 }`}
               >
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-3">
                   <div className="flex flex-1 items-start space-x-3.5">
-                    <div className={`flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl border ${
-                      task.isCompleted
-                        ? 'bg-green-500/10 border-green-500/20 text-green-500'
-                        : 'bg-indigo-600/15 border-indigo-500/20 text-indigo-400'
-                    }`}>
-                      <Smartphone size={24} className={task.isCompleted ? "" : "animate-pulse"} />
+                    <div
+                      className={`flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl border ${
+                        task.isCompleted
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : 'bg-amber-500/15 border-amber-500/25 text-amber-400'
+                      }`}
+                    >
+                      <Smartphone size={22} />
                     </div>
                     <div className="flex flex-col">
-                      <div className="flex items-center space-x-1.5 flex-wrap">
-                        <span className="font-bold text-white text-base">Home Screen Shortcut</span>
-                        <span className="text-[10px] bg-indigo-500/20 text-indigo-300 font-semibold px-1.5 py-0.5 rounded-full uppercase tracking-wider">Official</span>
-                      </div>
-                      <p className="mt-1 text-xs text-gray-400 leading-relaxed">
-                        Add Kitty Medallion to your device home screen for 1-tap instant launching and full-screen experience.
-                      </p>
-                      <div className="mt-2.5 flex items-center space-x-2 text-xs font-semibold">
-                        <span className="flex items-center text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded-lg border border-orange-500/10">
-                          <img src={LOGO_URL} className="mr-1 h-3.5 w-3.5 rounded-full object-contain" alt="KITTY" referrerPolicy="no-referrer" />
-                          +{task.reward} KITTY
+                      <div className="flex items-center space-x-2">
+                        <span className="font-display font-bold text-white text-base">
+                          Home Screen Shortcut
                         </span>
-                        <span className="text-green-400 bg-green-500/10 px-2 py-0.5 rounded-lg border border-green-500/10">
+                      </div>
+                      <p className="mt-1 text-xs text-zinc-400 leading-relaxed">
+                        Add Kitty Medallion to your phone home screen for instant 1-tap access.
+                      </p>
+                      {/* Clean unboxed reward metadata */}
+                      <div className="mt-2.5 flex items-center space-x-2 text-xs font-semibold">
+                        <span className="flex items-center text-amber-400 font-mono tabular-nums">
+                          <img
+                            src={LOGO_URL}
+                            className="mr-1.5 h-4 w-4 rounded-full object-contain"
+                            alt="KITTY"
+                            referrerPolicy="no-referrer"
+                          />
+                          +{task.reward.toLocaleString()} KITTY
+                        </span>
+                        <span className="text-zinc-600" aria-hidden="true">·</span>
+                        <span className="text-emerald-400 font-mono tabular-nums">
                           +{task.miningBoost} Hash/d
                         </span>
                       </div>
@@ -236,18 +251,18 @@ export default function Tasks() {
                   <button
                     onClick={() => handleTaskAction(task)}
                     disabled={task.isCompleted || claiming === task.id}
-                    className={`ml-4 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full transition-all ${
+                    className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl transition-all ${
                       task.isCompleted
-                        ? 'bg-green-500/20 text-green-500'
-                        : 'bg-indigo-500 text-white hover:bg-indigo-600 shadow-md shadow-indigo-500/15 active:scale-95'
+                        ? 'bg-emerald-500/15 text-emerald-400'
+                        : 'bg-amber-500 text-zinc-950 hover:bg-amber-400 active:scale-95 shadow-md shadow-amber-500/20'
                     }`}
                   >
                     {task.isCompleted ? (
                       <CheckCircle2 size={20} />
                     ) : claiming === task.id ? (
-                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-950 border-t-transparent" />
                     ) : (
-                      <Plus size={18} />
+                      <Plus size={20} />
                     )}
                   </button>
                 </div>
@@ -256,9 +271,9 @@ export default function Tasks() {
                   <button
                     onClick={() => handleTaskAction(task)}
                     disabled={claiming === task.id}
-                    className="mt-4 w-full flex items-center justify-center space-x-2 rounded-xl bg-gradient-to-r from-indigo-500 to-indigo-600 active:scale-[0.98] py-2.5 text-xs font-bold text-white hover:from-indigo-600 hover:to-indigo-700 transition duration-150 shadow-md shadow-indigo-500/10"
+                    className="mt-4 w-full flex items-center justify-center space-x-2 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 active:scale-[0.98] py-3 text-xs font-bold text-zinc-950 hover:from-amber-400 hover:to-orange-400 transition duration-150 shadow-md shadow-orange-500/15"
                   >
-                    <Plus size={14} />
+                    <Plus size={15} />
                     <span>Add to Home Screen</span>
                   </button>
                 )}
@@ -267,39 +282,65 @@ export default function Tasks() {
           }
 
           return (
-            <div key={task.id} className="flex items-center justify-between rounded-2xl bg-[#1c1c1c] p-4 ring-1 ring-white/5">
-              <div className="flex flex-1 items-center space-x-3">
-                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-orange-500/10 text-orange-500">
-                  {task.type === 'monetag' ? <PlaySquare size={24} /> : <Share2 size={24} />}
+            <div
+              key={task.id}
+              onClick={() => handleTaskAction(task)}
+              className={`group flex items-center justify-between rounded-2xl bg-[#141419] p-4 border transition-all cursor-pointer ${
+                task.isCompleted
+                  ? 'border-white/[0.04] opacity-75'
+                  : 'border-white/[0.06] hover:border-white/15 active:scale-[0.99]'
+              }`}
+            >
+              <div className="flex flex-1 items-center space-x-3.5 pr-3">
+                <div
+                  className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl border ${
+                    task.isCompleted
+                      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                      : 'bg-white/[0.03] border-white/[0.06] text-amber-400'
+                  }`}
+                >
+                  {task.type === 'monetag' ? <PlaySquare size={20} /> : <Share2 size={20} />}
                 </div>
                 <div className="flex flex-col">
-                  <span className="font-semibold text-white">{task.title}</span>
-                  <div className="mt-1 flex items-center space-x-2 text-xs text-gray-400">
-                    <span className="flex items-center text-orange-400">
-                      <img src={LOGO_URL} className="mr-1 h-3 w-3 rounded-full" alt="KITTY" referrerPolicy="no-referrer" />
-                      +{task.reward}
+                  <span className="font-semibold text-sm text-white leading-snug">
+                    {task.title}
+                  </span>
+                  <div className="mt-1 flex items-center space-x-2 text-xs">
+                    <span className="flex items-center font-mono font-semibold tabular-nums text-amber-400">
+                      <img
+                        src={LOGO_URL}
+                        className="mr-1 h-3.5 w-3.5 rounded-full object-contain"
+                        alt="KITTY"
+                        referrerPolicy="no-referrer"
+                      />
+                      +{task.reward.toLocaleString()}
                     </span>
-                    <span>•</span>
-                    <span className="text-green-400">+{task.miningBoost} Hash/d</span>
+                    <span className="text-zinc-600" aria-hidden="true">·</span>
+                    <span className="font-mono font-medium tabular-nums text-emerald-400">
+                      +{task.miningBoost} Hash/d
+                    </span>
                   </div>
                 </div>
               </div>
 
               <button
-                onClick={() => handleTaskAction(task)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleTaskAction(task);
+                }}
                 disabled={task.isCompleted || claiming === task.id}
-                className={`ml-4 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full transition-colors ${
+                className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl transition-all ${
                   task.isCompleted
-                    ? 'bg-green-500/20 text-green-500'
-                    : 'bg-white text-black hover:bg-gray-200'
+                    ? 'bg-emerald-500/15 text-emerald-400'
+                    : 'bg-white text-zinc-950 hover:bg-zinc-200 active:scale-95'
                 }`}
               >
                 {task.isCompleted ? (
-                  <CheckCircle2 size={20} />
+                  <CheckCircle2 size={19} />
                 ) : claiming === task.id ? (
-                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-black border-t-transparent" />
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-950 border-t-transparent" />
                 ) : (
-                  <ChevronRight size={20} />
+                  <ChevronRight size={19} />
                 )}
               </button>
             </div>
