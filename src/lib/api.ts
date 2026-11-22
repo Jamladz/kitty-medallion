@@ -257,5 +257,95 @@ export const api = {
       
       return { count, isClaimed };
     }
+  },
+
+  getReferrals: async () => {
+    try {
+      return await fetchApi('/referrals');
+    } catch (err) {
+      console.warn('API getReferrals failed, using client fallback', err);
+      const userId = getUserId();
+      const q = query(collection(db, 'users'), where('referrerId', '==', userId));
+      const snap = await getDocs(q);
+      const referrals = snap.docs
+        .map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            firstName: data.firstName || 'Telegram User',
+            lastName: data.lastName || '',
+            username: data.username || '',
+            miningSpeed: data.miningSpeed || 500,
+            joinedAt: data.referredAt || data.createdAt || Date.now()
+          };
+        })
+        .sort((a, b) => b.joinedAt - a.joinedAt);
+
+      const userRef = doc(db, 'users', userId);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        const currentCount = userSnap.data()?.referralCount || 0;
+        if (referrals.length > currentCount) {
+          await updateDoc(userRef, { referralCount: referrals.length });
+        }
+      }
+
+      return { referrals, count: referrals.length };
+    }
+  },
+
+  bindReferral: async (referrerCode: string) => {
+    const cleaned = String(referrerCode || '').trim().replace(/^(ref_|r_|ref-|invite_)/i, '');
+    if (!/^\d+$/.test(cleaned)) {
+      throw new Error('Please enter a valid numeric referral code or ID');
+    }
+    try {
+      return await fetchApi('/referrals/bind', {
+        method: 'POST',
+        body: JSON.stringify({ referrerCode: cleaned })
+      });
+    } catch (err: any) {
+      if (err.message && !err.message.includes('HTTP error')) {
+        throw err;
+      }
+      console.warn('API bindReferral failed, using client transaction fallback', err);
+      const userId = getUserId();
+      if (cleaned === userId) {
+        throw new Error('You cannot invite yourself');
+      }
+
+      await runTransaction(db, async (transaction) => {
+        const userRef = doc(db, 'users', userId);
+        const refUserRef = doc(db, 'users', cleaned);
+
+        const userSnap = await transaction.get(userRef);
+        const refSnap = await transaction.get(refUserRef);
+
+        if (!userSnap.exists()) throw new Error('User not found');
+        if (!refSnap.exists()) throw new Error('Inviter ID not found');
+
+        const userData = userSnap.data();
+        if (userData.referrerId) {
+          throw new Error('You have already linked an inviter');
+        }
+        if (refSnap.data().referrerId === userId) {
+          throw new Error('Circular referral is not allowed');
+        }
+
+        transaction.update(userRef, {
+          referrerId: cleaned,
+          referredAt: Date.now(),
+          balanceKitty: increment(100)
+        });
+
+        transaction.update(refUserRef, {
+          balanceKitty: increment(100),
+          miningSpeed: increment(50),
+          referralCount: increment(1)
+        });
+      });
+
+      return { success: true, referrerId: cleaned };
+    }
   }
 };

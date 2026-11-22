@@ -126,55 +126,213 @@ async function seedTasks() {
 seedTasks().catch(console.error);
 
 
+const extractReferrerId = (rawParam?: string | null): string | null => {
+  if (!rawParam) return null;
+  const cleaned = String(rawParam).trim();
+  if (!cleaned) return null;
+  const withoutPrefix = cleaned.replace(/^(ref_|r_|ref-|invite_)/i, '');
+  if (/^\d+$/.test(withoutPrefix)) {
+    return withoutPrefix;
+  }
+  return null;
+};
+
 app.post('/api/auth', authenticateTelegram, async (req, res) => {
   const tUser = (req as any).telegramUser;
-  const userId = (req as any).userId;
-  const { referrerId } = req.body;
-  
+  const userId = String((req as any).userId);
+  const { referrerId: bodyReferrerId, startParam: bodyStartParam } = req.body;
+
+  // Also check if start_param was inside the signed initData header
+  const authHeader = req.headers.authorization;
+  const rawInitData =
+    (authHeader && authHeader.startsWith('Bearer tma ')
+      ? authHeader.split('Bearer tma ')[1]
+      : '') ||
+    String(req.headers['x-telegram-init-data'] || '');
+  const initDataStartParam = rawInitData
+    ? new URLSearchParams(rawInitData).get('start_param')
+    : null;
+
+  const candidateRef =
+    extractReferrerId(bodyReferrerId) ||
+    extractReferrerId(bodyStartParam) ||
+    extractReferrerId(initDataStartParam);
+
   try {
     const userRef = db.collection('users').doc(userId);
-    const userDoc = await userRef.get();
     let isNewUser = false;
-    
-    if (!userDoc.exists) {
-      isNewUser = true;
-      let validReferrer = null;
-      if (referrerId && referrerId !== userId) {
-        const refDoc = await db.collection('users').doc(referrerId).get();
-        if (refDoc.exists) validReferrer = referrerId;
+    let referralApplied = false;
+
+    await db.runTransaction(async (t) => {
+      const userDoc = await t.get(userRef);
+
+      let validReferrer: string | null = null;
+      if (candidateRef && candidateRef !== userId) {
+        const refDoc = await t.get(db.collection('users').doc(candidateRef));
+        if (refDoc.exists) {
+          // Prevent circular referral A <-> B
+          const refData = refDoc.data();
+          if (refData?.referrerId !== userId) {
+            validReferrer = candidateRef;
+          }
+        }
       }
-      
-      const batch = db.batch();
-      batch.set(userRef, {
-        id: userId,
-        firstName: tUser.first_name || '',
-        lastName: tUser.last_name || '',
-        username: tUser.username || '',
-        balanceKitty: validReferrer ? 100 : 0,
-        balanceUsdt: 0,
-        miningSpeed: 500, // base mining 500/day
-        referralCount: 0,
-        referrerId: validReferrer,
-        lastMiningClaim: Date.now(),
-        createdAt: Date.now()
-      });
-      
-      if (validReferrer) {
-        const refUserRef = db.collection('users').doc(validReferrer);
-        batch.update(refUserRef, {
-          balanceKitty: FieldValue.increment(100),
-          miningSpeed: FieldValue.increment(50),
-          referralCount: FieldValue.increment(1)
+
+      if (!userDoc.exists) {
+        isNewUser = true;
+        t.set(userRef, {
+          id: userId,
+          firstName: tUser.first_name || '',
+          lastName: tUser.last_name || '',
+          username: tUser.username || '',
+          balanceKitty: validReferrer ? 100 : 0,
+          balanceUsdt: 0,
+          miningSpeed: 500, // base mining 500/24h
+          referralCount: 0,
+          referrerId: validReferrer,
+          referredAt: validReferrer ? Date.now() : null,
+          lastMiningClaim: Date.now(),
+          createdAt: Date.now()
         });
+
+        if (validReferrer) {
+          referralApplied = true;
+          const refUserRef = db.collection('users').doc(validReferrer);
+          t.update(refUserRef, {
+            balanceKitty: FieldValue.increment(100),
+            miningSpeed: FieldValue.increment(50),
+            referralCount: FieldValue.increment(1)
+          });
+        }
+      } else {
+        const existingData = userDoc.data()!;
+        const profileUpdates: Record<string, any> = {
+          firstName: tUser.first_name || existingData.firstName || '',
+          lastName: tUser.last_name || existingData.lastName || '',
+          username: tUser.username || existingData.username || ''
+        };
+
+        // If user never had a referrer before and opened an invite link now, credit the referral once
+        if (!existingData.referrerId && validReferrer) {
+          referralApplied = true;
+          profileUpdates.referrerId = validReferrer;
+          profileUpdates.referredAt = Date.now();
+          profileUpdates.balanceKitty = FieldValue.increment(100);
+
+          const refUserRef = db.collection('users').doc(validReferrer);
+          t.update(refUserRef, {
+            balanceKitty: FieldValue.increment(100),
+            miningSpeed: FieldValue.increment(50),
+            referralCount: FieldValue.increment(1)
+          });
+        }
+
+        t.update(userRef, profileUpdates);
       }
-      await batch.commit();
-    }
-    
+    });
+
     const updatedDoc = await userRef.get();
-    res.json({ token: 'mock_token', userId, user: updatedDoc.data(), isNewUser });
+    res.json({
+      token: 'mock_token',
+      userId,
+      user: updatedDoc.data(),
+      isNewUser,
+      referralApplied
+    });
   } catch (error) {
     console.error('Auth error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/referrals', authenticateTelegram, async (req, res) => {
+  const userId = String((req as any).userId);
+  try {
+    const snap = await db
+      .collection('users')
+      .where('referrerId', '==', userId)
+      .get();
+
+    const referrals = snap.docs
+      .map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          firstName: data.firstName || 'Telegram User',
+          lastName: data.lastName || '',
+          username: data.username || '',
+          miningSpeed: data.miningSpeed || 500,
+          joinedAt: data.referredAt || data.createdAt || Date.now()
+        };
+      })
+      .sort((a, b) => b.joinedAt - a.joinedAt);
+
+    // Ensure referralCount stays accurately synced with actual referred documents
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+    if (userDoc.exists) {
+      const currentCount = userDoc.data()?.referralCount || 0;
+      if (referrals.length > currentCount) {
+        await userRef.update({ referralCount: referrals.length });
+      }
+    }
+
+    res.json({ referrals, count: referrals.length });
+  } catch (error) {
+    console.error('Get referrals error:', error);
+    res.status(500).json({ error: 'Failed to load referrals' });
+  }
+});
+
+app.post('/api/referrals/bind', authenticateTelegram, async (req, res) => {
+  const userId = String((req as any).userId);
+  const rawCode = req.body?.referrerCode || req.body?.referrerId;
+  const targetReferrerId = extractReferrerId(rawCode);
+
+  if (!targetReferrerId) {
+    return res.status(400).json({ error: 'Invalid referral ID or code' });
+  }
+  if (targetReferrerId === userId) {
+    return res.status(400).json({ error: 'You cannot invite yourself' });
+  }
+
+  try {
+    await db.runTransaction(async (t) => {
+      const userRef = db.collection('users').doc(userId);
+      const refUserRef = db.collection('users').doc(targetReferrerId);
+
+      const [userDoc, refDoc] = await Promise.all([
+        t.get(userRef),
+        t.get(refUserRef)
+      ]);
+
+      if (!userDoc.exists) throw new Error('User account not found');
+      if (!refDoc.exists) throw new Error('Inviter ID not found');
+
+      const userData = userDoc.data()!;
+      if (userData.referrerId) {
+        throw new Error('You have already linked an inviter');
+      }
+      if (refDoc.data()?.referrerId === userId) {
+        throw new Error('Circular referral is not allowed');
+      }
+
+      t.update(userRef, {
+        referrerId: targetReferrerId,
+        referredAt: Date.now(),
+        balanceKitty: FieldValue.increment(100)
+      });
+
+      t.update(refUserRef, {
+        balanceKitty: FieldValue.increment(100),
+        miningSpeed: FieldValue.increment(50),
+        referralCount: FieldValue.increment(1)
+      });
+    });
+
+    res.json({ success: true, referrerId: targetReferrerId });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Failed to bind referral' });
   }
 });
 
