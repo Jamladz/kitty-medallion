@@ -1,7 +1,12 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { db } from '../lib/firebase';
-import { doc, onSnapshot, runTransaction, increment } from 'firebase/firestore';
+import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import { api } from '../lib/api';
+import {
+  detectReferrerOnLaunch,
+  referralService,
+  REFERRAL_CONFIG,
+} from '../lib/referralService';
 
 interface AuthContextType {
   user: any;
@@ -14,87 +19,14 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
   error: null,
-  refreshMining: async () => {}
+  refreshMining: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
 
-/**
- * Extracts a numeric Telegram Referrer ID from all standard Telegram Mini App entry points:
- * 1. window.Telegram.WebApp.initDataUnsafe.start_param
- * 2. URLSearchParams(window.Telegram.WebApp.initData).get('start_param')
- * 3. window.location.search (?tgWebAppStartParam=..., ?startapp=..., ?start=..., ?ref=...)
- * 4. window.location.hash (#tgWebAppStartParam=..., etc.)
- */
-export const detectTelegramReferrerId = (): string | undefined => {
-  if (typeof window === 'undefined') return undefined;
-
-  const candidates: Array<string | null | undefined> = [];
-  const webApp = window.Telegram?.WebApp;
-
-  // 1. Telegram WebApp initDataUnsafe.start_param
-  candidates.push(webApp?.initDataUnsafe?.start_param);
-
-  // 2. Raw signed initData query string
-  if (webApp?.initData) {
-    try {
-      const rawParams = new URLSearchParams(webApp.initData);
-      candidates.push(rawParams.get('start_param'));
-    } catch {}
-  }
-
-  // 3. URL search query parameters (?tgWebAppStartParam=ref_123 or ?startapp=ref_123 or ?ref=123)
-  try {
-    const searchParams = new URLSearchParams(window.location.search);
-    candidates.push(
-      searchParams.get('tgWebAppStartParam'),
-      searchParams.get('startapp'),
-      searchParams.get('start_param'),
-      searchParams.get('start'),
-      searchParams.get('ref')
-    );
-  } catch {}
-
-  // 4. URL hash parameters (#tgWebAppStartParam=ref_123)
-  try {
-    const hashStr = window.location.hash.replace(/^#/, '');
-    const qIndex = hashStr.indexOf('?');
-    const hashQuery = qIndex >= 0 ? hashStr.slice(qIndex + 1) : hashStr;
-    const hashParams = new URLSearchParams(hashQuery);
-    candidates.push(
-      hashParams.get('tgWebAppStartParam'),
-      hashParams.get('startapp'),
-      hashParams.get('start_param'),
-      hashParams.get('ref')
-    );
-  } catch {}
-
-  for (const raw of candidates) {
-    if (!raw) continue;
-    const cleaned = String(raw).trim().replace(/^(ref_|r_|ref-|invite_)/i, '');
-    if (/^\d+$/.test(cleaned)) {
-      try {
-        sessionStorage.setItem('tg_pending_referrer_id', cleaned);
-        localStorage.setItem('tg_pending_referrer_id', cleaned);
-      } catch {}
-      return cleaned;
-    }
-  }
-
-  // Fallback to cached referrer ID if Telegram router stripped query parameters on reload
-  try {
-    const cached =
-      sessionStorage.getItem('tg_pending_referrer_id') ||
-      localStorage.getItem('tg_pending_referrer_id');
-    if (cached && /^\d+$/.test(cached)) {
-      return cached;
-    }
-  } catch {}
-
-  return undefined;
-};
-
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +40,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (webApp) {
           webApp.ready();
           webApp.expand();
-          if (webApp.isVersionAtLeast && webApp.isVersionAtLeast('8.0') && webApp.requestFullscreen) {
+          if (
+            webApp.isVersionAtLeast &&
+            webApp.isVersionAtLeast('8.0') &&
+            webApp.requestFullscreen
+          ) {
             try {
               webApp.requestFullscreen();
             } catch (e) {
@@ -117,96 +53,72 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
 
-        // Detect referrer from all Telegram start_param sources
-        const referrerId = detectTelegramReferrerId();
-
-        // Resolve user details either from WebApp or fallback for testing outside Telegram
+        // Resolve user details from Telegram WebApp or local development fallback
         const tgUser = webApp?.initDataUnsafe?.user;
         const userId = tgUser?.id ? String(tgUser.id) : '999999999';
         const firstName = tgUser?.first_name || 'Developer';
         const lastName = tgUser?.last_name || 'User';
         const username = tgUser?.username || 'dev_user';
 
-        // 1. Try to call the API auth
+        // 1. Detect Referrer ID in exact priority order:
+        //    a) Telegram WebApp start_param (initDataUnsafe.start_param)
+        //    b) Fallback: query parameters (startapp / ref / start)
+        //    Automatically cleans "ref_" and ignores empty or self-referral
+        const referrerId = detectReferrerOnLaunch(userId);
+
+        // 2. Authenticate with server (which verifies Telegram initData signature & runs atomic referral transaction)
         let authSuccess = false;
         try {
-          const authData = await api.auth(referrerId);
+          const authData = await api.auth(referrerId || undefined);
           if (authData && !authData.fallback) {
             authSuccess = true;
           }
         } catch (apiErr) {
-          console.error('API Authentication failed, falling back to direct client-side Firestore authentication', apiErr);
+          console.error(
+            'API Authentication failed, falling back to direct client-side Firestore transaction',
+            apiErr
+          );
         }
 
-        // 2. Client-side atomic Firestore fallback (also handles late referral binding if user had no referrer yet)
+        // 3. If server API was unreachable, run the atomic referral service transaction or initialize user doc
         if (!authSuccess) {
-          const userDocRef = doc(db, 'users', userId);
-
-          await runTransaction(db, async (transaction) => {
-            const userDocSnap = await transaction.get(userDocRef);
-
-            let validReferrer: string | null = null;
-            if (referrerId && referrerId !== userId) {
-              const refDocSnap = await transaction.get(doc(db, 'users', referrerId));
-              if (refDocSnap.exists()) {
-                const refData = refDocSnap.data();
-                if (refData?.referrerId !== userId) {
-                  validReferrer = referrerId;
-                }
-              }
-            }
-
+          if (referrerId) {
+            await referralService.processReferral({
+              currentUserId: userId,
+              currentUserFirstName: firstName,
+              currentUserLastName: lastName,
+              currentUserUsername: username,
+              rawReferrerParam: referrerId,
+            });
+          } else {
+            const userDocRef = doc(db, 'users', userId);
+            const userDocSnap = await getDoc(userDocRef);
             if (!userDocSnap.exists()) {
-              transaction.set(userDocRef, {
+              const now = Date.now();
+              await setDoc(userDocRef, {
                 id: userId,
                 firstName,
                 lastName,
                 username,
-                balanceKitty: validReferrer ? 100 : 0,
+                balanceKitty: 0,
                 balanceUsdt: 0,
-                miningSpeed: 500,
+                miningSpeed: REFERRAL_CONFIG.DEFAULT_BASE_SPEED,
                 referralCount: 0,
-                referrerId: validReferrer,
-                referredAt: validReferrer ? Date.now() : null,
-                lastMiningClaim: Date.now(),
-                createdAt: Date.now()
+                referralsCount: 0,
+                earnedReferralCoins: 0,
+                referredBy: null,
+                referrerId: null,
+                referredAt: null,
+                claimedMilestones: [],
+                vipExpiresAt: 0,
+                lastMiningClaim: now,
+                createdAt: now,
               });
-
-              if (validReferrer) {
-                const refUserRef = doc(db, 'users', validReferrer);
-                transaction.update(refUserRef, {
-                  balanceKitty: increment(100),
-                  miningSpeed: increment(50),
-                  referralCount: increment(1)
-                });
-              }
-            } else {
-              const existingData = userDocSnap.data();
-              const updates: Record<string, any> = {
-                firstName: firstName || existingData.firstName || '',
-                lastName: lastName || existingData.lastName || '',
-                username: username || existingData.username || ''
-              };
-
-              if (!existingData.referrerId && validReferrer) {
-                updates.referrerId = validReferrer;
-                updates.referredAt = Date.now();
-                updates.balanceKitty = increment(100);
-
-                const refUserRef = doc(db, 'users', validReferrer);
-                transaction.update(refUserRef, {
-                  balanceKitty: increment(100),
-                  miningSpeed: increment(50),
-                  referralCount: increment(1)
-                });
-              }
-
-              transaction.update(userDocRef, updates);
             }
-          });
+          }
         }
 
-        // Subscribe to user updates in Firestore directly
+        // 4. Subscribe to real-time user updates in Firestore
         unsubscribe = onSnapshot(doc(db, 'users', userId), (docSnap) => {
           if (docSnap.exists()) {
             setUser(docSnap.data());

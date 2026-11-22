@@ -2,7 +2,7 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "A user in the system.",
+      "description": "A user in the Kitty Medallion system.",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
@@ -13,12 +13,38 @@
         "balanceUsdt": { "type": "number" },
         "miningSpeed": { "type": "number" },
         "referralCount": { "type": "number" },
+        "referralsCount": { "type": "number" },
+        "earnedReferralCoins": { "type": "number" },
+        "referredBy": { "type": "string" },
         "referrerId": { "type": "string" },
+        "referredAt": { "type": "number" },
+        "claimedMilestones": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "vipExpiresAt": { "type": "number" },
         "lastMiningClaim": { "type": "number" },
         "homeScreenAdded": { "type": "boolean" },
         "createdAt": { "type": "number" }
       },
       "required": ["id"]
+    },
+    "ReferralRecord": {
+      "title": "ReferralRecord",
+      "description": "Audit log record in the global referrals collection.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "referrerId": { "type": "string" },
+        "referredId": { "type": "string" },
+        "referredName": { "type": "string" },
+        "referredUsername": { "type": "string" },
+        "rewardAmount": { "type": "number" },
+        "welcomeBonus": { "type": "number" },
+        "speedBoost": { "type": "number" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["referrerId", "referredId", "rewardAmount", "timestamp"]
     },
     "Task": {
       "title": "Task",
@@ -95,6 +121,10 @@
     "users/{userId}": {
       "schema": { "$ref": "#/entities/User" },
       "description": "User profiles"
+    },
+    "referrals/{referralId}": {
+      "schema": { "$ref": "#/entities/ReferralRecord" },
+      "description": "Global referral event records"
     },
     "tasks/{taskId}": {
       "schema": { "$ref": "#/entities/Task" },

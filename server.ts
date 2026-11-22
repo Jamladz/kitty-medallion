@@ -192,12 +192,163 @@ app.post('/api/telegram-webhook', async (req, res) => {
   }
 });
 
+const REFERRAL_REWARDS = {
+  WELCOME_BONUS: 100,
+  REFERRER_REWARD: 250,
+  REFERRER_SPEED_BOOST: 50,
+  BASE_MINING_SPEED: 500
+};
+
+const SERVER_MILESTONES = [
+  { id: 'milestone_3', targetCount: 3, rewardCoins: 500, speedBoost: 100, vipDays: 1 },
+  { id: 'milestone_5', targetCount: 5, rewardCoins: 1000, speedBoost: 200, vipDays: 3 },
+  { id: 'milestone_10', targetCount: 10, rewardCoins: 2500, speedBoost: 500, vipDays: 7 },
+  { id: 'milestone_25', targetCount: 25, rewardCoins: 7000, speedBoost: 1500, vipDays: 30 }
+];
+
+async function executeAtomicReferralTransaction(params: {
+  userId: string;
+  firstName: string;
+  lastName: string;
+  username: string;
+  candidateRef: string | null;
+}) {
+  const { userId, firstName, lastName, username, candidateRef } = params;
+  const userRef = db.collection('users').doc(userId);
+  let isNewUser = false;
+  let referralApplied = false;
+
+  await db.runTransaction(async (t) => {
+    const userDoc = await t.get(userRef);
+
+    const validReferrer =
+      candidateRef && candidateRef !== userId ? candidateRef : null;
+
+    let referrerDoc: any = null;
+    const refUserRef = validReferrer
+      ? db.collection('users').doc(validReferrer)
+      : null;
+
+    if (refUserRef) {
+      referrerDoc = await t.get(refUserRef);
+    }
+
+    const now = Date.now();
+    const referredFullName =
+      `${firstName} ${lastName}`.trim() || username || `Miner #${userId.slice(-4)}`;
+
+    // Check if already referred or circular referral
+    const existingData = userDoc.exists ? userDoc.data() : null;
+    const alreadyReferred = Boolean(
+      existingData?.referredBy || existingData?.referrerId
+    );
+    const isCircular =
+      referrerDoc?.exists &&
+      (referrerDoc.data()?.referredBy === userId ||
+        referrerDoc.data()?.referrerId === userId);
+
+    const shouldApplyReferral = Boolean(
+      validReferrer && refUserRef && !alreadyReferred && !isCircular
+    );
+
+    // Step A: Update or Create the referred user document
+    if (!userDoc.exists) {
+      isNewUser = true;
+      t.set(userRef, {
+        id: userId,
+        firstName: firstName || '',
+        lastName: lastName || '',
+        username: username || '',
+        balanceKitty: shouldApplyReferral ? REFERRAL_REWARDS.WELCOME_BONUS : 0,
+        balanceUsdt: 0,
+        miningSpeed: REFERRAL_REWARDS.BASE_MINING_SPEED,
+        referralCount: 0,
+        referralsCount: 0,
+        earnedReferralCoins: 0,
+        referredBy: shouldApplyReferral ? validReferrer : null,
+        referrerId: shouldApplyReferral ? validReferrer : null,
+        referredAt: shouldApplyReferral ? now : null,
+        claimedMilestones: [],
+        vipExpiresAt: 0,
+        lastMiningClaim: now,
+        createdAt: now
+      });
+    } else {
+      const updates: Record<string, any> = {
+        firstName: firstName || existingData.firstName || '',
+        lastName: lastName || existingData.lastName || '',
+        username: username || existingData.username || ''
+      };
+
+      if (shouldApplyReferral) {
+        updates.referredBy = validReferrer;
+        updates.referrerId = validReferrer;
+        updates.referredAt = now;
+        updates.balanceKitty = FieldValue.increment(REFERRAL_REWARDS.WELCOME_BONUS);
+      }
+
+      t.update(userRef, updates);
+    }
+
+    // Step B & C: Update/Create the referrer document AND create record in "referrals" collection
+    if (shouldApplyReferral && validReferrer && refUserRef) {
+      referralApplied = true;
+
+      if (!referrerDoc || !referrerDoc.exists) {
+        // Create referrer document if it didn't exist yet
+        t.set(refUserRef, {
+          id: validReferrer,
+          firstName: `Miner #${validReferrer.slice(-4)}`,
+          lastName: '',
+          username: '',
+          balanceKitty: REFERRAL_REWARDS.REFERRER_REWARD,
+          balanceUsdt: 0,
+          miningSpeed:
+            REFERRAL_REWARDS.BASE_MINING_SPEED +
+            REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
+          referralCount: 1,
+          referralsCount: 1,
+          earnedReferralCoins: REFERRAL_REWARDS.REFERRER_REWARD,
+          referredBy: null,
+          referrerId: null,
+          claimedMilestones: [],
+          vipExpiresAt: 0,
+          lastMiningClaim: now,
+          createdAt: now
+        });
+      } else {
+        t.update(refUserRef, {
+          balanceKitty: FieldValue.increment(REFERRAL_REWARDS.REFERRER_REWARD),
+          miningSpeed: FieldValue.increment(REFERRAL_REWARDS.REFERRER_SPEED_BOOST),
+          referralCount: FieldValue.increment(1),
+          referralsCount: FieldValue.increment(1),
+          earnedReferralCoins: FieldValue.increment(REFERRAL_REWARDS.REFERRER_REWARD)
+        });
+      }
+
+      const referralRecordRef = db.collection('referrals').doc();
+      t.set(referralRecordRef, {
+        id: referralRecordRef.id,
+        referrerId: validReferrer,
+        referredId: userId,
+        referredName: referredFullName,
+        referredUsername: username || '',
+        rewardAmount: REFERRAL_REWARDS.REFERRER_REWARD,
+        welcomeBonus: REFERRAL_REWARDS.WELCOME_BONUS,
+        speedBoost: REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
+        timestamp: now
+      });
+    }
+  });
+
+  return { isNewUser, referralApplied };
+}
+
 app.post('/api/auth', authenticateTelegram, async (req, res) => {
   const tUser = (req as any).telegramUser;
   const userId = String((req as any).userId);
   const { referrerId: bodyReferrerId, startParam: bodyStartParam } = req.body;
 
-  // Also check if start_param was inside the signed initData header
   const authHeader = req.headers.authorization;
   const rawInitData =
     (authHeader && authHeader.startsWith('Bearer tma ')
@@ -214,7 +365,6 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
     extractReferrerId(initDataStartParam);
 
   try {
-    // Check if the user started the bot via `/start ref_ID` webhook before opening the Mini App
     if (!candidateRef) {
       const pendingDoc = await db.collection('pending_referrals').doc(userId).get();
       if (pendingDoc.exists) {
@@ -222,78 +372,15 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
       }
     }
 
-    const userRef = db.collection('users').doc(userId);
-    let isNewUser = false;
-    let referralApplied = false;
-
-    await db.runTransaction(async (t) => {
-      const userDoc = await t.get(userRef);
-
-      let validReferrer: string | null = null;
-      if (candidateRef && candidateRef !== userId) {
-        const refDoc = await t.get(db.collection('users').doc(candidateRef));
-        if (refDoc.exists) {
-          const refData = refDoc.data();
-          if (refData?.referrerId !== userId) {
-            validReferrer = candidateRef;
-          }
-        }
-      }
-
-      if (!userDoc.exists) {
-        isNewUser = true;
-        t.set(userRef, {
-          id: userId,
-          firstName: tUser.first_name || '',
-          lastName: tUser.last_name || '',
-          username: tUser.username || '',
-          balanceKitty: validReferrer ? 100 : 0,
-          balanceUsdt: 0,
-          miningSpeed: 500, // base mining 500/24h
-          referralCount: 0,
-          referrerId: validReferrer,
-          referredAt: validReferrer ? Date.now() : null,
-          lastMiningClaim: Date.now(),
-          createdAt: Date.now()
-        });
-
-        if (validReferrer) {
-          referralApplied = true;
-          const refUserRef = db.collection('users').doc(validReferrer);
-          t.update(refUserRef, {
-            balanceKitty: FieldValue.increment(100),
-            miningSpeed: FieldValue.increment(50),
-            referralCount: FieldValue.increment(1)
-          });
-        }
-      } else {
-        const existingData = userDoc.data()!;
-        const profileUpdates: Record<string, any> = {
-          firstName: tUser.first_name || existingData.firstName || '',
-          lastName: tUser.last_name || existingData.lastName || '',
-          username: tUser.username || existingData.username || ''
-        };
-
-        // Automatically attribute if user had no inviter yet and entered via referral link
-        if (!existingData.referrerId && validReferrer) {
-          referralApplied = true;
-          profileUpdates.referrerId = validReferrer;
-          profileUpdates.referredAt = Date.now();
-          profileUpdates.balanceKitty = FieldValue.increment(100);
-
-          const refUserRef = db.collection('users').doc(validReferrer);
-          t.update(refUserRef, {
-            balanceKitty: FieldValue.increment(100),
-            miningSpeed: FieldValue.increment(50),
-            referralCount: FieldValue.increment(1)
-          });
-        }
-
-        t.update(userRef, profileUpdates);
-      }
+    const { isNewUser, referralApplied } = await executeAtomicReferralTransaction({
+      userId,
+      firstName: tUser.first_name || '',
+      lastName: tUser.last_name || '',
+      username: tUser.username || '',
+      candidateRef
     });
 
-    const updatedDoc = await userRef.get();
+    const updatedDoc = await db.collection('users').doc(userId).get();
     res.json({
       token: 'mock_token',
       userId,
@@ -307,37 +394,135 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
   }
 });
 
+app.post('/api/referrals/process', authenticateTelegram, async (req, res) => {
+  const tUser = (req as any).telegramUser;
+  const userId = String((req as any).userId);
+  const candidateRef = extractReferrerId(req.body?.referrerId);
+
+  if (!candidateRef || candidateRef === userId) {
+    return res.json({ applied: false, reason: 'invalid_or_self_referral' });
+  }
+
+  try {
+    const { referralApplied } = await executeAtomicReferralTransaction({
+      userId,
+      firstName: tUser.first_name || '',
+      lastName: tUser.last_name || '',
+      username: tUser.username || '',
+      candidateRef
+    });
+    res.json({ applied: referralApplied });
+  } catch (error: any) {
+    console.error('Process referral error:', error);
+    res.status(400).json({ error: error.message || 'Referral processing failed' });
+  }
+});
+
+app.post('/api/referrals/claim-milestone', authenticateTelegram, async (req, res) => {
+  const userId = String((req as any).userId);
+  const { milestoneId } = req.body;
+  const milestone = SERVER_MILESTONES.find((m) => m.id === milestoneId);
+
+  if (!milestone) {
+    return res.status(400).json({ error: 'Invalid milestone ID' });
+  }
+
+  try {
+    await db.runTransaction(async (t) => {
+      const userRef = db.collection('users').doc(userId);
+      const userDoc = await t.get(userRef);
+      if (!userDoc.exists) throw new Error('User not found');
+
+      const data = userDoc.data()!;
+      const count = Math.max(data.referralsCount || 0, data.referralCount || 0);
+      const claimed: string[] = Array.isArray(data.claimedMilestones)
+        ? data.claimedMilestones
+        : [];
+
+      if (claimed.includes(milestone.id)) {
+        throw new Error('Milestone already claimed');
+      }
+      if (count < milestone.targetCount) {
+        throw new Error(`Requires ${milestone.targetCount} referrals`);
+      }
+
+      const now = Date.now();
+      const baseExpiry =
+        data.vipExpiresAt && data.vipExpiresAt > now ? data.vipExpiresAt : now;
+      const newVipExpiry = baseExpiry + milestone.vipDays * 24 * 60 * 60 * 1000;
+
+      t.update(userRef, {
+        balanceKitty: FieldValue.increment(milestone.rewardCoins),
+        earnedReferralCoins: FieldValue.increment(milestone.rewardCoins),
+        miningSpeed: FieldValue.increment(milestone.speedBoost),
+        claimedMilestones: FieldValue.arrayUnion(milestone.id),
+        vipExpiresAt: newVipExpiry
+      });
+    });
+
+    res.json({
+      success: true,
+      milestoneId: milestone.id,
+      rewardCoins: milestone.rewardCoins,
+      vipDays: milestone.vipDays
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Could not claim milestone' });
+  }
+});
+
 app.get('/api/referrals', authenticateTelegram, async (req, res) => {
   const userId = String((req as any).userId);
   try {
-    const snap = await db
+    // 1. Query dedicated "referrals" collection where('referrerId', '==', userId)
+    const refSnap = await db
+      .collection('referrals')
+      .where('referrerId', '==', userId)
+      .get();
+
+    let referrals = refSnap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        referrerId: data.referrerId,
+        referredId: data.referredId,
+        referredName: data.referredName || 'Telegram Friend',
+        referredUsername: data.referredUsername || '',
+        rewardAmount: data.rewardAmount || REFERRAL_REWARDS.REFERRER_REWARD,
+        welcomeBonus: data.welcomeBonus || REFERRAL_REWARDS.WELCOME_BONUS,
+        speedBoost: data.speedBoost || REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
+        timestamp: data.timestamp || Date.now()
+      };
+    });
+
+    // 2. Backwards-compatible fallback: also include any users with referrerId == userId not yet in "referrals"
+    const usersSnap = await db
       .collection('users')
       .where('referrerId', '==', userId)
       .get();
 
-    const referrals = snap.docs
-      .map((d) => {
-        const data = d.data();
-        return {
-          id: d.id,
-          firstName: data.firstName || 'Telegram User',
-          lastName: data.lastName || '',
-          username: data.username || '',
-          miningSpeed: data.miningSpeed || 500,
-          joinedAt: data.referredAt || data.createdAt || Date.now()
-        };
-      })
-      .sort((a, b) => b.joinedAt - a.joinedAt);
-
-    // Ensure referralCount stays accurately synced with actual referred documents
-    const userRef = db.collection('users').doc(userId);
-    const userDoc = await userRef.get();
-    if (userDoc.exists) {
-      const currentCount = userDoc.data()?.referralCount || 0;
-      if (referrals.length > currentCount) {
-        await userRef.update({ referralCount: referrals.length });
+    const recordedIds = new Set(referrals.map((r) => String(r.referredId)));
+    for (const uDoc of usersSnap.docs) {
+      if (!recordedIds.has(String(uDoc.id))) {
+        const uData = uDoc.data();
+        referrals.push({
+          id: `legacy_${uDoc.id}`,
+          referrerId: userId,
+          referredId: uDoc.id,
+          referredName:
+            `${uData.firstName || ''} ${uData.lastName || ''}`.trim() ||
+            uData.username ||
+            'Telegram Friend',
+          referredUsername: uData.username || '',
+          rewardAmount: REFERRAL_REWARDS.REFERRER_REWARD,
+          welcomeBonus: REFERRAL_REWARDS.WELCOME_BONUS,
+          speedBoost: REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
+          timestamp: uData.referredAt || uData.createdAt || Date.now()
+        });
       }
     }
+
+    referrals.sort((a, b) => b.timestamp - a.timestamp);
 
     res.json({ referrals, count: referrals.length });
   } catch (error) {
@@ -346,55 +531,37 @@ app.get('/api/referrals', authenticateTelegram, async (req, res) => {
   }
 });
 
-app.post('/api/referrals/bind', authenticateTelegram, async (req, res) => {
+app.get('/api/referrals/leaderboard', authenticateTelegram, async (req, res) => {
   const userId = String((req as any).userId);
-  const rawCode = req.body?.referrerCode || req.body?.referrerId;
-  const targetReferrerId = extractReferrerId(rawCode);
-
-  if (!targetReferrerId) {
-    return res.status(400).json({ error: 'Invalid referral ID or code' });
-  }
-  if (targetReferrerId === userId) {
-    return res.status(400).json({ error: 'You cannot invite yourself' });
-  }
+  const maxLimit = Math.min(50, Math.max(5, Number(req.query.limit) || 15));
 
   try {
-    await db.runTransaction(async (t) => {
-      const userRef = db.collection('users').doc(userId);
-      const refUserRef = db.collection('users').doc(targetReferrerId);
+    const snap = await db
+      .collection('users')
+      .orderBy('referralsCount', 'desc')
+      .limit(maxLimit)
+      .get();
 
-      const [userDoc, refDoc] = await Promise.all([
-        t.get(userRef),
-        t.get(refUserRef)
-      ]);
-
-      if (!userDoc.exists) throw new Error('User account not found');
-      if (!refDoc.exists) throw new Error('Inviter ID not found');
-
-      const userData = userDoc.data()!;
-      if (userData.referrerId) {
-        throw new Error('You have already linked an inviter');
-      }
-      if (refDoc.data()?.referrerId === userId) {
-        throw new Error('Circular referral is not allowed');
-      }
-
-      t.update(userRef, {
-        referrerId: targetReferrerId,
-        referredAt: Date.now(),
-        balanceKitty: FieldValue.increment(100)
-      });
-
-      t.update(refUserRef, {
-        balanceKitty: FieldValue.increment(100),
-        miningSpeed: FieldValue.increment(50),
-        referralCount: FieldValue.increment(1)
-      });
+    const leaderboard = snap.docs.map((d, idx) => {
+      const data = d.data();
+      const count = Math.max(data.referralsCount || 0, data.referralCount || 0);
+      return {
+        id: d.id,
+        firstName: data.firstName || 'Miner',
+        lastName: data.lastName || '',
+        username: data.username || '',
+        referralsCount: count,
+        earnedReferralCoins:
+          data.earnedReferralCoins || count * REFERRAL_REWARDS.REFERRER_REWARD,
+        isCurrentUser: String(d.id) === userId,
+        rank: idx + 1
+      };
     });
 
-    res.json({ success: true, referrerId: targetReferrerId });
-  } catch (error: any) {
-    res.status(400).json({ error: error.message || 'Failed to bind referral' });
+    res.json({ leaderboard });
+  } catch (error) {
+    console.error('Leaderboard error:', error);
+    res.status(500).json({ error: 'Failed to load leaderboard' });
   }
 });
 

@@ -8,6 +8,7 @@ import {
   setDoc, 
   updateDoc, 
   increment, 
+  arrayUnion,
   writeBatch, 
   runTransaction, 
   query, 
@@ -30,7 +31,8 @@ const clientApp = initializeApp(config);
 export const clientDb = getFirestore(clientApp, databaseId);
 
 export const FieldValue = {
-  increment: (val: number) => increment(val)
+  increment: (val: number) => increment(val),
+  arrayUnion: (...vals: any[]) => arrayUnion(...vals)
 };
 
 export class CollectionWrapper {
