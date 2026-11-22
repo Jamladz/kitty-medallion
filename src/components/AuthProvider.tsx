@@ -104,23 +104,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 referralCount: increment(1)
               });
             }
-          } else {
-            // Auto-claim mining rewards on login just to keep balance fresh
-            try {
-              const data = userDocSnap.data()!;
-              const now = Date.now();
-              const timePassedMs = now - data.lastMiningClaim;
-              const daysPassed = timePassedMs / (1000 * 60 * 60 * 24);
-              if (daysPassed > 0.001) {
-                const earned = daysPassed * data.miningSpeed;
-                await updateDoc(userDocRef, {
-                  balanceKitty: increment(earned),
-                  lastMiningClaim: now
-                });
-              }
-            } catch (claimErr) {
-              console.error('Client-side auto-claim failed', claimErr);
-            }
           }
         }
 

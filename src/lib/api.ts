@@ -66,20 +66,25 @@ export const api = {
       const userId = getUserId();
       const userRef = doc(db, 'users', userId);
       const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
-        const data = userSnap.data();
-        const now = Date.now();
-        const timePassedMs = now - data.lastMiningClaim;
-        const daysPassed = timePassedMs / (1000 * 60 * 60 * 24);
-        if (daysPassed > 0.001) {
-          const earned = daysPassed * data.miningSpeed;
-          await updateDoc(userRef, {
-            balanceKitty: increment(earned),
-            lastMiningClaim: now
-          });
-        }
+      if (!userSnap.exists()) {
+        throw new Error('User not found');
       }
-      return { success: true };
+      const data = userSnap.data();
+      const now = Date.now();
+      const cycleMs = 24 * 60 * 60 * 1000;
+      const lastClaim = data.lastMiningClaim || now;
+      const timePassedMs = now - lastClaim;
+
+      if (timePassedMs < cycleMs) {
+        throw new Error('24-hour mining cycle has not finished yet');
+      }
+
+      const earned = data.miningSpeed || 500;
+      await updateDoc(userRef, {
+        balanceKitty: increment(earned),
+        lastMiningClaim: now
+      });
+      return { success: true, earned };
     }
   },
 

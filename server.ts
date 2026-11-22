@@ -168,9 +168,6 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
         });
       }
       await batch.commit();
-    } else {
-      // Auto-claim mining rewards on login just to keep balance fresh
-      await claimMining(userId);
     }
     
     const updatedDoc = await userRef.get();
@@ -181,35 +178,41 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
   }
 });
 
+const MINING_CYCLE_MS = 24 * 60 * 60 * 1000;
+
 async function claimMining(userId: string) {
   const userRef = db.collection('users').doc(userId);
-  await db.runTransaction(async (transaction) => {
+  return await db.runTransaction(async (transaction) => {
     const userDoc = await transaction.get(userRef);
-    if (!userDoc.exists) return;
+    if (!userDoc.exists) throw new Error('User not found');
     const data = userDoc.data()!;
     const now = Date.now();
-    const timePassedMs = now - data.lastMiningClaim;
-    const daysPassed = timePassedMs / (1000 * 60 * 60 * 24);
+    const lastClaim = data.lastMiningClaim || now;
+    const timePassedMs = now - lastClaim;
     
-    if (daysPassed > 0.001) { // minimum threshold to claim
-      const earned = daysPassed * data.miningSpeed;
-      transaction.update(userRef, {
-        balanceKitty: FieldValue.increment(earned),
-        lastMiningClaim: now
-      });
+    if (timePassedMs < MINING_CYCLE_MS) {
+      const remainingHours = Math.ceil((MINING_CYCLE_MS - timePassedMs) / (1000 * 60 * 60));
+      throw new Error(`Mining cycle in progress. Ready in ~${remainingHours}h.`);
     }
+
+    const earned = data.miningSpeed || 500;
+    transaction.update(userRef, {
+      balanceKitty: FieldValue.increment(earned),
+      lastMiningClaim: now
+    });
+    return earned;
   });
 }
 
 app.post('/api/claim-mining', authenticateTelegram, async (req, res) => {
   const userId = (req as any).userId;
   try {
-    await claimMining(userId);
+    const earned = await claimMining(userId);
     const userDoc = await db.collection('users').doc(userId).get();
-    res.json({ user: userDoc.data() });
-  } catch (error) {
+    res.json({ success: true, earned, user: userDoc.data() });
+  } catch (error: any) {
     console.error('Claim mining error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(400).json({ error: error.message || 'Mining cycle not finished yet' });
   }
 });
 
