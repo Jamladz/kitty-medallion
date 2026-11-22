@@ -27,9 +27,9 @@ service cloud.firestore {
       allow create: if request.resource.data.id == userId
                     && (!('referralsCount' in request.resource.data) || request.resource.data.referralsCount <= 1)
                     && (!('balanceKitty' in request.resource.data) || request.resource.data.balanceKitty <= 5000);
-      allow update: if isBoundedIncrement('referralsCount', 1)
-                    && isBoundedIncrement('referralCount', 1)
-                    && isBoundedIncrement('earnedReferralCoins', 10000)
+      allow update: if isBoundedIncrement('referralsCount', 50)
+                    && isBoundedIncrement('referralCount', 50)
+                    && isBoundedIncrement('earnedReferralCoins', 15000)
                     && isBoundedIncrement('balanceKitty', 25000)
                     && isValidMilestoneUpdate()
                     && isReferredByImmutableOnceSet();

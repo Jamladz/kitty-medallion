@@ -20,20 +20,99 @@ const getInitData = () => {
   return '';
 };
 
-const getUserId = () => {
-  if (typeof window !== 'undefined' && window.Telegram && window.Telegram.WebApp) {
-    const user = window.Telegram.WebApp.initDataUnsafe?.user;
-    if (user && user.id) return String(user.id);
+export const getEffectiveTelegramUser = () => {
+  if (typeof window !== 'undefined') {
+    const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
+    if (tgUser && tgUser.id) {
+      return {
+        id: String(tgUser.id),
+        first_name: tgUser.first_name || 'Miner',
+        last_name: tgUser.last_name || '',
+        username: tgUser.username || ''
+      };
+    }
+
+    // Also try parsing raw initData if initDataUnsafe was not populated yet
+    const rawInit = window.Telegram?.WebApp?.initData;
+    if (rawInit) {
+      try {
+        const userJson = new URLSearchParams(rawInit).get('user');
+        if (userJson) {
+          const parsed = JSON.parse(userJson);
+          if (parsed && parsed.id) {
+            return {
+              id: String(parsed.id),
+              first_name: parsed.first_name || 'Miner',
+              last_name: parsed.last_name || '',
+              username: parsed.username || ''
+            };
+          }
+        }
+      } catch {}
+    }
+
+    // Outside Telegram (browser preview): if opened with a referral parameter (?startapp=ref_... or ?ref=...),
+    // generate/persist a unique visitor ID per browser tab so testing a referral link doesn't collide with 999999999
+    try {
+      const search = new URLSearchParams(window.location.search);
+      const hasReferralParam = Boolean(
+        search.get('startapp') ||
+          search.get('ref') ||
+          search.get('start') ||
+          search.get('tgWebAppStartParam')
+      );
+      const storedVisitorId = sessionStorage.getItem('kitty_browser_visitor_id');
+      if (storedVisitorId) {
+        return {
+          id: storedVisitorId,
+          first_name: 'Invited',
+          last_name: `Fren #${storedVisitorId.slice(-4)}`,
+          username: `fren_${storedVisitorId.slice(-4)}`
+        };
+      }
+      if (hasReferralParam) {
+        const rawRef =
+          search.get('startapp') ||
+          search.get('ref') ||
+          search.get('start') ||
+          search.get('tgWebAppStartParam') ||
+          '';
+        const cleanedRef = rawRef.replace(/^(ref_|r_|ref-|invite_)/i, '').trim();
+        // If the main dev user is 999999999 and someone opens a link with ref_999999999 in a tab, assign a distinct test visitor ID
+        if (cleanedRef === '999999999') {
+          const generatedId = String(Math.floor(100000000 + Math.random() * 800000000));
+          sessionStorage.setItem('kitty_browser_visitor_id', generatedId);
+          return {
+            id: generatedId,
+            first_name: 'Invited',
+            last_name: `Fren #${generatedId.slice(-4)}`,
+            username: `fren_${generatedId.slice(-4)}`
+          };
+        }
+      }
+    } catch {}
   }
-  return '999999999';
+
+  return {
+    id: '999999999',
+    first_name: 'Developer',
+    last_name: 'User',
+    username: 'dev_user'
+  };
+};
+
+const getUserId = () => {
+  return getEffectiveTelegramUser().id;
 };
 
 const fetchApi = async (path: string, options: RequestInit = {}) => {
   const initData = getInitData();
+  const effectiveUser = getEffectiveTelegramUser();
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer tma ${initData}`,
     'X-Telegram-Init-Data': initData,
+    'X-Telegram-User': encodeURIComponent(JSON.stringify(effectiveUser)),
     ...options.headers,
   };
   
@@ -50,10 +129,16 @@ const fetchApi = async (path: string, options: RequestInit = {}) => {
 export const api = {
   auth: async (referrerId?: string) => {
     try {
-      return await fetchApi('/auth', { method: 'POST', body: JSON.stringify({ referrerId }) });
+      const startParam =
+        typeof window !== 'undefined'
+          ? window.Telegram?.WebApp?.initDataUnsafe?.start_param || ''
+          : '';
+      return await fetchApi('/auth', {
+        method: 'POST',
+        body: JSON.stringify({ referrerId, startParam })
+      });
     } catch (err) {
       console.warn('API auth failed, falling back to client-side Firestore authentication', err);
-      // We return a mock success structure so that calling code proceeds smoothly
       return { success: true, fallback: true };
     }
   },

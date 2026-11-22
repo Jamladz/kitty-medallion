@@ -73,24 +73,43 @@ export default function Referral() {
     });
   }, []);
 
-  const loadReferralHubData = async () => {
-    setLoadingData(true);
-    try {
-      const [myRefs, topLeaders] = await Promise.all([
-        referralService.getMyReferrals(userId),
-        referralService.getLeaderboard(userId, 15),
-      ]);
-      setReferrals(myRefs);
-      setLeaderboard(topLeaders);
-    } catch (e) {
-      console.error('Error loading Referral Hub data:', e);
-    } finally {
-      setLoadingData(false);
-    }
-  };
-
   useEffect(() => {
-    loadReferralHubData();
+    let isMounted = true;
+    setLoadingData(true);
+
+    const loadInitial = async () => {
+      try {
+        const [myRefs, topLeaders] = await Promise.all([
+          referralService.getMyReferrals(userId),
+          referralService.getLeaderboard(userId, 15),
+        ]);
+        if (!isMounted) return;
+        setReferrals(myRefs);
+        setLeaderboard(topLeaders);
+      } catch (e) {
+        console.error('Error loading Referral Hub data:', e);
+      } finally {
+        if (isMounted) setLoadingData(false);
+      }
+    };
+
+    loadInitial();
+
+    // Real-time Firestore listener on the global "referrals" collection for instant live updates
+    const unsubscribeRefs = referralService.subscribeToMyReferrals(
+      userId,
+      (liveReferrals) => {
+        if (isMounted && liveReferrals.length > 0) {
+          setReferrals(liveReferrals);
+          setLoadingData(false);
+        }
+      }
+    );
+
+    return () => {
+      isMounted = false;
+      unsubscribeRefs();
+    };
   }, [userId, user?.referralsCount, user?.referralCount]);
 
   const handleCopyLink = () => {

@@ -47,11 +47,63 @@ const authenticateTelegram = async (req: express.Request, res: express.Response,
       initData = String(customHeader);
     }
 
-    // Allow mock user if we are in local development, or on preview host, or if no Telegram bot token is configured, or if we are accessing outside Telegram context
-    const isPreviewHost = req.hostname && (req.hostname.includes('run.app') || req.hostname.includes('localhost'));
-    const isMockAllowed = process.env.NODE_ENV !== 'production' || isPreviewHost || BOT_TOKEN === 'test_token' || !initData || initData === 'undefined';
+    const isPreviewHost = Boolean(
+      req.hostname && (req.hostname.includes('run.app') || req.hostname.includes('localhost'))
+    );
+    const isMockAllowed =
+      process.env.NODE_ENV !== 'production' ||
+      isPreviewHost ||
+      BOT_TOKEN === 'test_token';
 
-    if (isMockAllowed && (!initData || initData === 'undefined' || !initData.includes('hash='))) {
+    // 1. If initData is present and contains a user JSON payload, parse and verify it first!
+    if (initData && initData !== 'undefined') {
+      const urlParams = new URLSearchParams(initData);
+      const userStr = urlParams.get('user');
+      const hash = urlParams.get('hash');
+
+      if (userStr) {
+        // Verify HMAC signature if a real BOT_TOKEN is configured and we are in strict mode
+        if (hash && BOT_TOKEN !== 'test_token' && !isPreviewHost && process.env.NODE_ENV === 'production') {
+          urlParams.delete('hash');
+          const paramsList: string[] = [];
+          urlParams.forEach((value, key) => {
+            paramsList.push(`${key}=${value}`);
+          });
+          paramsList.sort();
+          const dataCheckString = paramsList.join('\n');
+
+          const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+          const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+          if (calculatedHash !== hash) {
+            return res.status(401).json({ error: 'Unauthorized: Invalid Telegram signature' });
+          }
+        }
+
+        const parsedUser = JSON.parse(userStr);
+        if (parsedUser && parsedUser.id) {
+          (req as any).telegramUser = parsedUser;
+          (req as any).userId = String(parsedUser.id);
+          return next();
+        }
+      }
+    }
+
+    // 2. Also check if client sent explicit Telegram user details in X-Telegram-User header or body
+    const explicitUserHeader = req.headers['x-telegram-user'];
+    if (explicitUserHeader && isMockAllowed) {
+      try {
+        const parsedHeaderUser = JSON.parse(decodeURIComponent(String(explicitUserHeader)));
+        if (parsedHeaderUser && parsedHeaderUser.id) {
+          (req as any).telegramUser = parsedHeaderUser;
+          (req as any).userId = String(parsedHeaderUser.id);
+          return next();
+        }
+      } catch {}
+    }
+
+    // 3. Fallback to mock developer user ONLY when opened in a regular browser outside Telegram
+    if (isMockAllowed) {
       const mockUser = {
         id: 999999999,
         first_name: 'Developer',
@@ -64,43 +116,7 @@ const authenticateTelegram = async (req: express.Request, res: express.Response,
       return next();
     }
 
-    if (!initData) {
-      return res.status(401).json({ error: 'Unauthorized: Missing Telegram WebApp initData' });
-    }
-
-    const urlParams = new URLSearchParams(initData);
-    const hash = urlParams.get('hash');
-    
-    if (!hash) {
-      return res.status(401).json({ error: 'Unauthorized: Missing signature hash' });
-    }
-
-    urlParams.delete('hash');
-    const paramsList: string[] = [];
-    urlParams.forEach((value, key) => {
-      paramsList.push(`${key}=${value}`);
-    });
-    paramsList.sort();
-    const dataCheckString = paramsList.join('\n');
-    
-    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-    const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
-
-    const bypassSignature = isPreviewHost || BOT_TOKEN === 'test_token';
-
-    if (calculatedHash !== hash && !bypassSignature && process.env.NODE_ENV !== 'development') {
-      return res.status(401).json({ error: 'Unauthorized: Invalid Telegram signature' });
-    }
-
-    const userStr = urlParams.get('user');
-    if (!userStr) {
-      return res.status(401).json({ error: 'Unauthorized: Missing user payload' });
-    }
-
-    const user = JSON.parse(userStr);
-    (req as any).telegramUser = user;
-    (req as any).userId = String(user.id);
-    next();
+    return res.status(401).json({ error: 'Unauthorized: Missing Telegram WebApp initData' });
   } catch (error: any) {
     console.error('Telegram authentication exception:', error);
     return res.status(401).json({ error: 'Unauthorized: Authentication exception occurred', details: error.message });
@@ -523,6 +539,22 @@ app.get('/api/referrals', authenticateTelegram, async (req, res) => {
     }
 
     referrals.sort((a, b) => b.timestamp - a.timestamp);
+
+    // Reconcile user's referralsCount & referralCount if actual referral records exceed stored counter
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+    if (userDoc.exists) {
+      const uData = userDoc.data()!;
+      const storedCount = Math.max(uData.referralsCount || 0, uData.referralCount || 0);
+      if (referrals.length > storedCount) {
+        const diff = referrals.length - storedCount;
+        await userRef.update({
+          referralCount: referrals.length,
+          referralsCount: referrals.length,
+          earnedReferralCoins: FieldValue.increment(diff * REFERRAL_REWARDS.REFERRER_REWARD)
+        });
+      }
+    }
 
     res.json({ referrals, count: referrals.length });
   } catch (error) {

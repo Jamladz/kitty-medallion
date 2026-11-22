@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { db } from '../lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
-import { api } from '../lib/api';
+import { api, getEffectiveTelegramUser } from '../lib/api';
 import {
   detectReferrerOnLaunch,
   referralService,
@@ -53,12 +53,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           }
         }
 
-        // Resolve user details from Telegram WebApp or local development fallback
-        const tgUser = webApp?.initDataUnsafe?.user;
-        const userId = tgUser?.id ? String(tgUser.id) : '999999999';
-        const firstName = tgUser?.first_name || 'Developer';
-        const lastName = tgUser?.last_name || 'User';
-        const username = tgUser?.username || 'dev_user';
+        // Resolve user details from Telegram WebApp or browser visitor session
+        const effectiveUser = getEffectiveTelegramUser();
+        const userId = effectiveUser.id;
+        const firstName = effectiveUser.first_name || 'Developer';
+        const lastName = effectiveUser.last_name || 'User';
+        const username = effectiveUser.username || 'dev_user';
 
         // 1. Detect Referrer ID in exact priority order:
         //    a) Telegram WebApp start_param (initDataUnsafe.start_param)
@@ -68,10 +68,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
         // 2. Authenticate with server (which verifies Telegram initData signature & runs atomic referral transaction)
         let authSuccess = false;
+        let serverReferralApplied = false;
         try {
           const authData = await api.auth(referrerId || undefined);
           if (authData && !authData.fallback) {
             authSuccess = true;
+            serverReferralApplied = Boolean(
+              authData.referralApplied || authData.user?.referredBy || authData.user?.referrerId
+            );
           }
         } catch (apiErr) {
           console.error(
@@ -80,9 +84,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           );
         }
 
-        // 3. If server API was unreachable, run the atomic referral service transaction or initialize user doc
-        if (!authSuccess) {
-          if (referrerId) {
+        // 3. Guarantee referral attribution: if a referrerId was detected and not yet applied, run atomic referralService.processReferral
+        if (referrerId && !serverReferralApplied) {
+          try {
             await referralService.processReferral({
               currentUserId: userId,
               currentUserFirstName: firstName,
@@ -90,31 +94,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
               currentUserUsername: username,
               rawReferrerParam: referrerId,
             });
-          } else {
-            const userDocRef = doc(db, 'users', userId);
-            const userDocSnap = await getDoc(userDocRef);
-            if (!userDocSnap.exists()) {
-              const now = Date.now();
-              await setDoc(userDocRef, {
-                id: userId,
-                firstName,
-                lastName,
-                username,
-                balanceKitty: 0,
-                balanceUsdt: 0,
-                miningSpeed: REFERRAL_CONFIG.DEFAULT_BASE_SPEED,
-                referralCount: 0,
-                referralsCount: 0,
-                earnedReferralCoins: 0,
-                referredBy: null,
-                referrerId: null,
-                referredAt: null,
-                claimedMilestones: [],
-                vipExpiresAt: 0,
-                lastMiningClaim: now,
-                createdAt: now,
-              });
-            }
+          } catch (refErr) {
+            console.error('Referral processing error:', refErr);
+          }
+        } else if (!authSuccess) {
+          const userDocRef = doc(db, 'users', userId);
+          const userDocSnap = await getDoc(userDocRef);
+          if (!userDocSnap.exists()) {
+            const now = Date.now();
+            await setDoc(userDocRef, {
+              id: userId,
+              firstName,
+              lastName,
+              username,
+              balanceKitty: 0,
+              balanceUsdt: 0,
+              miningSpeed: REFERRAL_CONFIG.DEFAULT_BASE_SPEED,
+              referralCount: 0,
+              referralsCount: 0,
+              earnedReferralCoins: 0,
+              referredBy: null,
+              referrerId: null,
+              referredAt: null,
+              claimedMilestones: [],
+              vipExpiresAt: 0,
+              lastMiningClaim: now,
+              createdAt: now,
+            });
           }
         }
 

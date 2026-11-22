@@ -1,4 +1,5 @@
 import { db } from './firebase';
+import { getEffectiveTelegramUser } from './api';
 import {
   doc,
   collection,
@@ -7,6 +8,7 @@ import {
   orderBy,
   limit,
   getDocs,
+  onSnapshot,
   runTransaction,
   increment,
   arrayUnion,
@@ -107,7 +109,7 @@ export function sanitizeReferrerId(
   currentUserId?: string
 ): string | null {
   if (!rawParam) return null;
-  const cleaned = String(rawParam).trim().replace(/^ref_/i, '').trim();
+  const cleaned = String(rawParam).trim().replace(/^(ref_|r_|ref-|invite_)/i, '').trim();
   if (!cleaned || !/^\d+$/.test(cleaned)) return null;
   if (currentUserId && cleaned === String(currentUserId)) {
     // Self-referral check -> ignore completely
@@ -215,12 +217,14 @@ const getInitDataHeader = () => {
 
 const callBackendApi = async (path: string, options: RequestInit = {}) => {
   const initData = getInitDataHeader();
+  const effectiveUser = getEffectiveTelegramUser();
   const response = await fetch(`/api${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer tma ${initData}`,
       'X-Telegram-Init-Data': initData,
+      'X-Telegram-User': encodeURIComponent(JSON.stringify(effectiveUser)),
       ...options.headers,
     },
   });
@@ -497,6 +501,35 @@ export const referralService = {
     }
 
     return [];
+  },
+
+  /**
+   * Real-time listener on the global "referrals" collection where('referrerId', '==', userId)
+   * so the inviter's screen updates instantaneously when a friend opens their referral link.
+   */
+  subscribeToMyReferrals: (
+    userId: string,
+    onUpdate: (referrals: ReferralRecord[]) => void
+  ): (() => void) => {
+    const q = query(
+      collection(db, 'referrals'),
+      where('referrerId', '==', userId)
+    );
+    return onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<ReferralRecord, 'id'>),
+          }))
+          .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        onUpdate(list);
+      },
+      (err) => {
+        console.warn('Real-time referrals subscription error:', err);
+      }
+    );
   },
 
   /**
