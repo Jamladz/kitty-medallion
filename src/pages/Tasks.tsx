@@ -218,13 +218,13 @@ export default function Tasks() {
 
   if (loading) {
     return (
-      <div className="flex flex-col px-5 pt-6 space-y-3">
+      <div className="flex flex-col px-4 sm:px-5 pt-4 sm:pt-6 space-y-3">
         <div className="h-7 w-28 rounded-lg bg-white/5 animate-pulse" />
         <div className="h-4 w-64 rounded-lg bg-white/5 animate-pulse mb-4" />
         {[1, 2, 3, 4].map((n) => (
           <div
             key={n}
-            className="h-[88px] w-full rounded-2xl bg-[#141419] border border-white/[0.05] animate-pulse"
+            className="h-[86px] sm:h-[88px] w-full rounded-2xl bg-[#141419] border border-white/[0.05] animate-pulse"
           />
         ))}
       </div>
@@ -237,11 +237,11 @@ export default function Tasks() {
     tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
 
   return (
-    <div className="flex flex-col px-5 pt-6 pb-10">
+    <div className="flex flex-col px-4 sm:px-5 pt-4 sm:pt-6 pb-8">
       {/* Header & Progress Summary */}
-      <div className="mb-5 flex items-start justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-white">
+      <div className="mb-4 sm:mb-5 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-white">
             Missions
           </h1>
           <p className="mt-1 text-xs text-zinc-400">
@@ -250,7 +250,7 @@ export default function Tasks() {
         </div>
 
         {tasks.length > 0 && (
-          <div className="flex flex-col items-end rounded-2xl bg-[#141419] px-3.5 py-2 border border-white/[0.06]">
+          <div className="flex shrink-0 flex-col items-end rounded-2xl bg-[#141419] px-3 sm:px-3.5 py-2 border border-white/[0.06]">
             <span className="font-mono text-xs font-extrabold tabular-nums text-amber-400">
               {completedCount} / {tasks.length}
             </span>
@@ -262,7 +262,7 @@ export default function Tasks() {
       </div>
 
       {/* Mission Pool Progress Banner */}
-      <div className="mb-5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-[#141419] to-[#141419] p-4 border border-amber-500/20">
+      <div className="mb-4 sm:mb-5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-[#141419] to-[#141419] p-3.5 sm:p-4 border border-amber-500/20">
         <div className="flex items-center justify-between text-xs mb-2.5">
           <span className="font-semibold text-zinc-300">
             Total Mission Pool
@@ -286,7 +286,7 @@ export default function Tasks() {
       </div>
 
       {/* Uniform Equal-Sized Mission Frames */}
-      <div className="flex flex-col space-y-3">
+      <div className="flex flex-col space-y-2.5 sm:space-y-3">
         {tasks.map((task) => {
           const { title, subtitle, actionLabel, Icon } = formatTaskMeta(task);
           const isCompleted = Boolean(task.isCompleted);
@@ -296,37 +296,37 @@ export default function Tasks() {
             <div
               key={task.id}
               onClick={() => handleTaskAction(task)}
-              className={`group flex h-[88px] w-full items-center justify-between gap-3.5 rounded-2xl px-4 border transition-all cursor-pointer select-none ${
+              className={`group flex h-[86px] sm:h-[88px] w-full items-center justify-between gap-2.5 sm:gap-3.5 rounded-2xl px-3.5 sm:px-4 border transition-all cursor-pointer select-none ${
                 isCompleted
                   ? 'bg-[#141419]/65 border-emerald-500/20'
                   : 'bg-[#141419] border-white/[0.07] hover:border-amber-500/35 active:scale-[0.99] shadow-lg shadow-black/25'
               }`}
             >
-              {/* Left: Fixed 48x48 Icon Frame */}
+              {/* Left: Fixed Equal Icon Frame */}
               <div
-                className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border transition-colors ${
+                className={`flex h-11 w-11 sm:h-12 sm:w-12 shrink-0 items-center justify-center rounded-2xl border transition-colors ${
                   isCompleted
                     ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400'
                     : 'bg-gradient-to-br from-amber-500/15 to-orange-500/5 border-amber-500/25 text-amber-400 group-hover:border-amber-400/40'
                 }`}
               >
-                <Icon size={21} />
+                <Icon size={20} />
               </div>
 
               {/* Center: Single-line Title, Subtitle & Reward Row */}
               <div className="flex min-w-0 flex-1 flex-col justify-center">
-                <span className="font-display text-sm font-bold text-white truncate">
+                <span className="font-display text-[13px] sm:text-sm font-bold text-white truncate">
                   {title}
                 </span>
                 <span className="mt-0.5 text-[11px] text-zinc-400 truncate">
                   {subtitle}
                 </span>
 
-                <div className="mt-1.5 flex items-center space-x-2 text-xs">
+                <div className="mt-1.5 flex items-center space-x-1.5 sm:space-x-2 text-xs">
                   <span className="flex items-center font-mono font-bold tabular-nums text-amber-400">
                     <img
                       src={LOGO_URL}
-                      className="mr-1 h-3.5 w-3.5 rounded-full object-contain"
+                      className="mr-1 h-3.5 w-3.5 shrink-0 rounded-full object-contain"
                       alt="KITTY"
                       referrerPolicy="no-referrer"
                     />
@@ -336,7 +336,7 @@ export default function Tasks() {
                     ·
                   </span>
                   <span className="flex items-center font-mono font-semibold tabular-nums text-emerald-400">
-                    <Zap size={11} className="mr-0.5" />+{task.miningBoost}/24h
+                    <Zap size={11} className="mr-0.5 shrink-0" />+{task.miningBoost}/24h
                   </span>
                 </div>
               </div>
@@ -349,7 +349,7 @@ export default function Tasks() {
                   handleTaskAction(task);
                 }}
                 disabled={isCompleted || isClaiming}
-                className={`flex h-10 w-[86px] shrink-0 items-center justify-center space-x-1 rounded-xl text-xs font-bold transition-all ${
+                className={`flex h-9 w-[78px] sm:h-10 sm:w-[86px] shrink-0 items-center justify-center space-x-1 rounded-xl text-xs font-bold transition-all ${
                   isCompleted
                     ? 'bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 cursor-default'
                     : 'bg-gradient-to-r from-amber-500 to-orange-500 text-zinc-950 hover:from-amber-400 hover:to-orange-400 active:scale-95 shadow-md shadow-amber-500/15'

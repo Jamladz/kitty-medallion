@@ -118,7 +118,10 @@ export default function Profile() {
   const balanceKitty = user?.balanceKitty || 0;
   const balanceUsdt = user?.balanceUsdt || 0;
   const miningSpeed = user?.miningSpeed || 500;
-  const referralCount = user?.referralCount || 0;
+  const referralCount = Math.max(
+    user?.referralsCount || 0,
+    user?.referralCount || 0
+  );
   const estimatedNetWorthUsdt = balanceUsdt + balanceKitty / RATE;
 
   const tier = getMinerTier(balanceKitty);
@@ -189,21 +192,21 @@ export default function Profile() {
   };
 
   return (
-    <div className="flex flex-col px-5 pt-6 pb-10">
+    <div className="flex flex-col px-4 sm:px-5 pt-4 sm:pt-6 pb-8">
       {/* Page Title & Quick ID Copy */}
-      <div className="mb-5 flex items-center justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-white">
+      <div className="mb-4 sm:mb-5 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-white">
             Profile
           </h1>
-          <p className="mt-0.5 text-xs text-zinc-400">
+          <p className="mt-0.5 text-xs text-zinc-400 truncate">
             Personal Passport & Portfolio Overview
           </p>
         </div>
 
         <button
           onClick={handleCopyId}
-          className="flex items-center space-x-1.5 rounded-2xl bg-[#141419] px-3 py-2 border border-white/[0.06] text-xs font-mono text-zinc-300 hover:text-white hover:border-white/15 active:scale-95 transition-all"
+          className="flex shrink-0 items-center space-x-1.5 rounded-2xl bg-[#141419] px-3 py-2 border border-white/[0.06] text-xs font-mono text-zinc-300 hover:text-white hover:border-white/15 active:scale-95 transition-all"
         >
           <Hash size={13} className="text-amber-400" />
           <span className="tabular-nums">{user?.id}</span>
@@ -216,33 +219,33 @@ export default function Profile() {
       </div>
 
       {/* Hero Identity & Tier Progress Card */}
-      <div className="relative mb-4 overflow-hidden rounded-3xl bg-[#141419] p-5 border border-white/[0.06] shadow-xl">
+      <div className="relative mb-4 overflow-hidden rounded-3xl bg-[#141419] p-4 sm:p-5 border border-white/[0.06] shadow-xl">
         {/* Ambient radial highlight */}
         <div className="pointer-events-none absolute -right-10 -top-10 h-36 w-36 rounded-full bg-amber-500/10 blur-2xl" />
 
-        <div className="relative z-10 flex items-center space-x-4">
+        <div className="relative z-10 flex items-center space-x-3.5 sm:space-x-4">
           {/* Circular Avatar with Telegram Photo or 2-Letter Initials */}
-          <div className="relative flex-shrink-0">
+          <div className="relative shrink-0">
             {tgUser?.photo_url ? (
               <img
                 src={tgUser.photo_url}
                 alt="Profile"
                 referrerPolicy="no-referrer"
-                className="h-18 w-18 rounded-full object-cover border-2 border-amber-500/50 shadow-lg"
+                className="h-15 w-15 sm:h-18 sm:w-18 rounded-full object-cover border-2 border-amber-500/50 shadow-lg"
               />
             ) : (
-              <div className="flex h-18 w-18 items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-orange-600 text-zinc-950 font-display text-xl font-extrabold tracking-wider shadow-lg shadow-orange-500/20">
+              <div className="flex h-15 w-15 sm:h-18 sm:w-18 items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-orange-600 text-zinc-950 font-display text-lg sm:text-xl font-extrabold tracking-wider shadow-lg shadow-orange-500/20">
                 {initials}
               </div>
             )}
           </div>
 
           <div className="flex flex-1 flex-col min-w-0">
-            <h2 className="font-display text-lg font-bold text-white truncate">
+            <h2 className="font-display text-base sm:text-lg font-bold text-white truncate">
               {user?.firstName} {user?.lastName}
             </h2>
 
-            <div className="mt-0.5 flex items-center space-x-2 text-xs text-zinc-400 truncate">
+            <div className="mt-0.5 flex items-center space-x-1.5 sm:space-x-2 text-xs text-zinc-400 truncate">
               {user?.username ? (
                 <span className="font-medium text-amber-400 truncate">
                   @{user.username}
@@ -258,7 +261,7 @@ export default function Profile() {
 
             <div className="mt-2 flex items-center space-x-1.5 text-xs">
               <Award size={14} className="text-amber-400 shrink-0" />
-              <span className={`font-semibold ${tier.accentText}`}>
+              <span className={`font-semibold truncate ${tier.accentText}`}>
                 {tier.name}
               </span>
             </div>

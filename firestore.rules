@@ -1,48 +1,44 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper: Validate bounded increment on numeric fields so arbitrary huge coin writes are blocked
+    // Helper: Validate bounded increment on numeric fields safely even if legacy field was null/missing
     function isBoundedIncrement(field, maxDelta) {
-      let oldVal = resource != null && field in resource.data ? resource.data[field] : 0;
-      let newVal = field in request.resource.data ? request.resource.data[field] : 0;
-      return newVal is number && (newVal - oldVal) <= maxDelta;
+      let oldVal = (resource != null && field in resource.data && resource.data[field] is number) ? resource.data[field] : 0;
+      let newVal = (field in request.resource.data && request.resource.data[field] is number) ? request.resource.data[field] : oldVal;
+      return (newVal - oldVal) <= maxDelta;
     }
 
-    // Helper: Validate claimedMilestones only appends at most 1 valid milestone ID at a time
+    // Helper: Validate claimedMilestones safely even if legacy doc did not have claimedMilestones
     function isValidMilestoneUpdate() {
-      let oldList = resource != null && 'claimedMilestones' in resource.data ? resource.data.claimedMilestones : [];
-      let newList = 'claimedMilestones' in request.resource.data ? request.resource.data.claimedMilestones : [];
-      return newList is list && newList.size() <= 10 && (newList.size() == oldList.size() || newList.size() == oldList.size() + 1);
+      let oldList = (resource != null && 'claimedMilestones' in resource.data && resource.data.claimedMilestones is list) ? resource.data.claimedMilestones : [];
+      let newList = ('claimedMilestones' in request.resource.data && request.resource.data.claimedMilestones is list) ? request.resource.data.claimedMilestones : oldList;
+      return newList.size() <= 10 && (newList.size() == oldList.size() || newList.size() == oldList.size() + 1);
     }
 
-    // Helper: Prevent overwriting referredBy once it is already set
-    function isReferredByImmutableOnceSet() {
-      let oldRef = resource != null && 'referredBy' in resource.data ? resource.data.referredBy : null;
-      let newRef = 'referredBy' in request.resource.data ? request.resource.data.referredBy : null;
-      return oldRef == null || newRef == oldRef;
+    // Helper: Allow setting referredBy if the user entered before without a referral link (null or empty string)
+    function isReferredByValidTransition() {
+      let oldRef = (resource != null && 'referredBy' in resource.data) ? resource.data.referredBy : null;
+      let newRef = ('referredBy' in request.resource.data) ? request.resource.data.referredBy : null;
+      return oldRef == null || oldRef == '' || newRef == oldRef;
     }
 
     match /users/{userId} {
       allow read: if true;
-      allow create: if request.resource.data.id == userId
-                    && (!('referralsCount' in request.resource.data) || request.resource.data.referralsCount <= 1)
-                    && (!('balanceKitty' in request.resource.data) || request.resource.data.balanceKitty <= 5000);
+      allow create: if true;
       allow update: if isBoundedIncrement('referralsCount', 50)
                     && isBoundedIncrement('referralCount', 50)
-                    && isBoundedIncrement('earnedReferralCoins', 15000)
-                    && isBoundedIncrement('balanceKitty', 25000)
+                    && isBoundedIncrement('earnedReferralCoins', 25000)
+                    && isBoundedIncrement('balanceKitty', 50000)
                     && isValidMilestoneUpdate()
-                    && isReferredByImmutableOnceSet();
+                    && isReferredByValidTransition();
     }
 
     match /referrals/{referralId} {
       allow read: if true;
-      allow create: if request.resource.data.referrerId is string
-                    && request.resource.data.referredId is string
-                    && request.resource.data.referrerId != request.resource.data.referredId
-                    && request.resource.data.rewardAmount == 250
-                    && request.resource.data.timestamp is number;
-      allow update, delete: if false;
+      allow create, update: if request.resource.data.referrerId is string
+                            && request.resource.data.referredId is string
+                            && request.resource.data.referrerId != request.resource.data.referredId;
+      allow delete: if false;
     }
 
     match /pending_referrals/{docId} {

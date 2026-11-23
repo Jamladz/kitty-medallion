@@ -20,6 +20,25 @@ const getInitData = () => {
   return '';
 };
 
+export const notifyUserUpdated = (user: any) => {
+  if (typeof window === 'undefined' || !user || !user.id) return;
+  try {
+    window.localStorage.setItem(`kitty_user_cache_${user.id}`, JSON.stringify(user));
+  } catch {}
+  try {
+    window.dispatchEvent(new CustomEvent('kitty:user-updated', { detail: user }));
+  } catch {}
+};
+
+export const getClientCachedUser = (userId: string) => {
+  if (typeof window === 'undefined' || !userId) return null;
+  try {
+    const raw = window.localStorage.getItem(`kitty_user_cache_${userId}`);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+};
+
 export const getEffectiveTelegramUser = () => {
   if (typeof window !== 'undefined') {
     const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
@@ -51,8 +70,29 @@ export const getEffectiveTelegramUser = () => {
       } catch {}
     }
 
+    // Also inspect #tgWebAppData in window.location.hash in case Telegram passed user there
+    try {
+      const hashStr = window.location.hash.replace(/^#/, '');
+      const hashParams = new URLSearchParams(hashStr);
+      const tgWebAppData = hashParams.get('tgWebAppData');
+      if (tgWebAppData) {
+        const userJson = new URLSearchParams(tgWebAppData).get('user');
+        if (userJson) {
+          const parsed = JSON.parse(userJson);
+          if (parsed && parsed.id) {
+            return {
+              id: String(parsed.id),
+              first_name: parsed.first_name || 'Miner',
+              last_name: parsed.last_name || '',
+              username: parsed.username || ''
+            };
+          }
+        }
+      }
+    } catch {}
+
     // Outside Telegram (browser preview): if opened with a referral parameter (?startapp=ref_... or ?ref=...),
-    // generate/persist a unique visitor ID per browser tab so testing a referral link doesn't collide with 999999999
+    // generate/persist a unique visitor ID per browser tab if the referrer is 999999999 so testing doesn't self-refer
     try {
       const search = new URLSearchParams(window.location.search);
       const hasReferralParam = Boolean(
@@ -78,7 +118,6 @@ export const getEffectiveTelegramUser = () => {
           search.get('tgWebAppStartParam') ||
           '';
         const cleanedRef = rawRef.replace(/^(ref_|r_|ref-|invite_)/i, '').trim();
-        // If the main dev user is 999999999 and someone opens a link with ref_999999999 in a tab, assign a distinct test visitor ID
         if (cleanedRef === '999999999') {
           const generatedId = String(Math.floor(100000000 + Math.random() * 800000000));
           sessionStorage.setItem('kitty_browser_visitor_id', generatedId);
@@ -123,7 +162,11 @@ const fetchApi = async (path: string, options: RequestInit = {}) => {
     throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
   }
   
-  return response.json();
+  const data = await response.json();
+  if (data && data.user && data.user.id) {
+    notifyUserUpdated(data.user);
+  }
+  return data;
 };
 
 const STATIC_TASKS = [
@@ -140,15 +183,17 @@ let clientEarlyStatusCache: { count: number; isClaimed: boolean; expiresAt: numb
 let clientBotInfoCache: { botUsername: string; appShortName: string } | null = null;
 
 export const api = {
-  auth: async (referrerId?: string) => {
+  auth: async (referrerId?: string, clientCachedUser?: any) => {
     try {
       const startParam =
         typeof window !== 'undefined'
           ? window.Telegram?.WebApp?.initDataUnsafe?.start_param || ''
           : '';
+      const userId = getUserId();
+      const cached = clientCachedUser || getClientCachedUser(userId);
       return await fetchApi('/auth', {
         method: 'POST',
-        body: JSON.stringify({ referrerId, startParam })
+        body: JSON.stringify({ referrerId, startParam, clientCachedUser: cached })
       });
     } catch (err) {
       console.warn('API auth failed, falling back to client-side Firestore authentication', err);

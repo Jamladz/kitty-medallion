@@ -1,5 +1,9 @@
 import { db } from './firebase';
-import { getEffectiveTelegramUser } from './api';
+import {
+  getEffectiveTelegramUser,
+  getClientCachedUser,
+  notifyUserUpdated,
+} from './api';
 import {
   doc,
   collection,
@@ -18,6 +22,7 @@ import {
 
 export const REFERRAL_CONFIG = {
   WELCOME_BONUS: 100,        // +100 KITTY instant welcome bonus for the invited friend
+  WELCOME_BONUS_USDT: 2,     // +2.00 USDT first-time referral entry gift for the invited friend
   REFERRER_REWARD: 250,      // +250 KITTY instant referral reward for the inviter
   REFERRER_SPEED_BOOST: 50,  // +50 KITTY/24h permanent mining speed boost for the inviter
   DEFAULT_BASE_SPEED: 500,   // 500 KITTY/24h default base mining speed
@@ -119,6 +124,24 @@ export function sanitizeReferrerId(
   return candidate;
 }
 
+/**
+ * Checks whether a user already has a valid real referrer (ignores null, empty string, self, or mock 999999999).
+ * This allows users who entered the app previously WITHOUT a referral link to still be referred when invited later.
+ */
+export function hasValidReferrer(
+  userData: any,
+  currentUserId?: string
+): boolean {
+  if (!userData) return false;
+  const raw = String(userData.referredBy || userData.referrerId || '').trim();
+  if (!raw || raw === 'null' || raw === 'undefined') return false;
+  if (currentUserId && raw === String(currentUserId)) return false;
+  if (raw === '999999999' && String(currentUserId || '') !== '999999999') {
+    return false;
+  }
+  return /^\d+$/.test(raw);
+}
+
 export function clearPendingReferrer() {
   try {
     sessionStorage.removeItem('kitty_detected_referrer');
@@ -133,10 +156,76 @@ function persistDetectedReferrer(refId: string) {
   } catch {}
 }
 
+// Capture initial URL search and hash parameters immediately at module load time
+// BEFORE HashRouter or any component mounts and alters window.location.hash.
+const INITIAL_LAUNCH_SEARCH =
+  typeof window !== 'undefined' ? window.location.search : '';
+const INITIAL_LAUNCH_HASH =
+  typeof window !== 'undefined' ? window.location.hash : '';
+
+function extractFromUrlStrings(
+  searchStr: string,
+  hashRaw: string,
+  currentUserId?: string
+): string | null {
+  try {
+    const searchParams = new URLSearchParams(searchStr);
+    const queryCandidate =
+      searchParams.get('startapp') ||
+      searchParams.get('tgWebAppStartParam') ||
+      searchParams.get('ref') ||
+      searchParams.get('start');
+
+    const fromQuery = sanitizeReferrerId(queryCandidate, currentUserId);
+    if (fromQuery) return fromQuery;
+
+    const hashStr = hashRaw.replace(/^#/, '');
+    // Check both before and after '?' inside hash
+    const candidatesToParse = [hashStr];
+    const qIdx = hashStr.indexOf('?');
+    if (qIdx >= 0) {
+      candidatesToParse.unshift(hashStr.slice(qIdx + 1));
+    }
+
+    for (const part of candidatesToParse) {
+      const hashQuery = new URLSearchParams(part);
+      const hashCandidate =
+        hashQuery.get('startapp') ||
+        hashQuery.get('tgWebAppStartParam') ||
+        hashQuery.get('ref') ||
+        hashQuery.get('start');
+
+      const fromHash = sanitizeReferrerId(hashCandidate, currentUserId);
+      if (fromHash) return fromHash;
+
+      const tgWebAppData = hashQuery.get('tgWebAppData');
+      if (tgWebAppData) {
+        const innerParams = new URLSearchParams(tgWebAppData);
+        const fromInner = sanitizeReferrerId(
+          innerParams.get('start_param'),
+          currentUserId
+        );
+        if (fromInner) return fromInner;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+// Immediately persist any referrer present at bundle load time
+if (typeof window !== 'undefined') {
+  const earlyRef =
+    sanitizeReferrerId(window.Telegram?.WebApp?.initDataUnsafe?.start_param) ||
+    extractFromUrlStrings(INITIAL_LAUNCH_SEARCH, INITIAL_LAUNCH_HASH);
+  if (earlyRef) {
+    persistDetectedReferrer(earlyRef);
+  }
+}
+
 /**
  * Reads the referrer ID on app launch in exact priority order:
  * 1) Telegram WebApp start_param (initDataUnsafe.start_param or initData start_param)
- * 2) Fallback: Page URL query & hash parameters (startapp / ref / start / tgWebAppStartParam)
+ * 2) Fallback: Page URL query & hash parameters (both initial launch URL and current URL)
  * 3) Persisted pending referrer from session/localStorage if not yet applied
  */
 export function detectReferrerOnLaunch(currentUserId?: string): string | null {
@@ -166,53 +255,30 @@ export function detectReferrerOnLaunch(currentUserId?: string): string | null {
     }
   } catch {}
 
-  // Priority B: Fallback query parameters from window.location.search & hash
+  // Priority B1: Live window.location.search & window.location.hash
+  const fromLiveUrl = extractFromUrlStrings(
+    window.location.search,
+    window.location.hash,
+    currentUserId
+  );
+  if (fromLiveUrl) {
+    persistDetectedReferrer(fromLiveUrl);
+    return fromLiveUrl;
+  }
+
+  // Priority B2: Initial launch search & hash captured before HashRouter mounted
+  const fromInitialUrl = extractFromUrlStrings(
+    INITIAL_LAUNCH_SEARCH,
+    INITIAL_LAUNCH_HASH,
+    currentUserId
+  );
+  if (fromInitialUrl) {
+    persistDetectedReferrer(fromInitialUrl);
+    return fromInitialUrl;
+  }
+
+  // Priority C: Persisted pending referrer in session/localStorage
   try {
-    const searchParams = new URLSearchParams(window.location.search);
-    const queryCandidate =
-      searchParams.get('startapp') ||
-      searchParams.get('tgWebAppStartParam') ||
-      searchParams.get('ref') ||
-      searchParams.get('start');
-
-    const fromQuery = sanitizeReferrerId(queryCandidate, currentUserId);
-    if (fromQuery) {
-      persistDetectedReferrer(fromQuery);
-      return fromQuery;
-    }
-
-    // Check hash params if Telegram client attached them after #
-    const hashStr = window.location.hash.replace(/^#/, '');
-    const qIdx = hashStr.indexOf('?');
-    const hashQuery = new URLSearchParams(
-      qIdx >= 0 ? hashStr.slice(qIdx + 1) : hashStr
-    );
-    const hashCandidate =
-      hashQuery.get('startapp') ||
-      hashQuery.get('tgWebAppStartParam') ||
-      hashQuery.get('ref') ||
-      hashQuery.get('start');
-
-    const fromHash = sanitizeReferrerId(hashCandidate, currentUserId);
-    if (fromHash) {
-      persistDetectedReferrer(fromHash);
-      return fromHash;
-    }
-
-    // Also inspect tgWebAppData inside hash if present
-    const tgWebAppData = hashQuery.get('tgWebAppData');
-    if (tgWebAppData) {
-      const innerParams = new URLSearchParams(tgWebAppData);
-      const fromInner = sanitizeReferrerId(
-        innerParams.get('start_param'),
-        currentUserId
-      );
-      if (fromInner) {
-        persistDetectedReferrer(fromInner);
-        return fromInner;
-      }
-    }
-
     const cached =
       sessionStorage.getItem('kitty_detected_referrer') ||
       localStorage.getItem('kitty_pending_referrer');
@@ -245,14 +311,14 @@ export function buildReferralLink(
  * https://t.me/share/url?url=...&text=...
  */
 export function buildTelegramShareUrl(referralLink: string): string {
-  const promoText = `🐱🪙 Join me on Kitty Medallion! Mine every 24 hours, climb the Milestone ranks, and get an instant +${REFERRAL_CONFIG.WELCOME_BONUS} KITTY Welcome Bonus when you launch now!`;
+  const promoText = `🐱💵 Join me on Kitty Medallion! Claim an instant +${REFERRAL_CONFIG.WELCOME_BONUS_USDT}.00 USDT & +${REFERRAL_CONFIG.WELCOME_BONUS} KITTY Welcome Gift when you open my invite link!`;
   return `https://t.me/share/url?url=${encodeURIComponent(
     referralLink
   )}&text=${encodeURIComponent(promoText)}`;
 }
 
 // ============================================================================
-// 3. ATOMIC FIRESTORE TRANSACTION & SERVICE METHODS
+// 3. ATOMIC REFERRAL ATTRIBUTION & SERVICE METHODS
 // ============================================================================
 
 const getInitDataHeader = () => {
@@ -279,10 +345,14 @@ const callBackendApi = async (path: string, options: RequestInit = {}) => {
     const errBody = await response.json().catch(() => ({}));
     throw new Error(errBody.error || `HTTP ${response.status}`);
   }
-  return response.json();
+  const data = await response.json();
+  if (data && data.user && data.user.id) {
+    notifyUserUpdated(data.user);
+  }
+  return data;
 };
 
-// Client-side memory cache for Referral Hub to avoid repeated Firestore reads
+// Client-side memory cache for Referral Hub
 const myReferralsClientCache = new Map<
   string,
   { data: ReferralRecord[]; expiresAt: number }
@@ -291,11 +361,7 @@ const myReferralsClientCache = new Map<
 export const referralService = {
   /**
    * Executes the atomic referral attribution:
-   * 1. Calls the backend atomic transaction first.
-   * 2. Falls back to the exact client-side Firestore runTransaction if offline/dev:
-   *    a) Updates/Creates current user document: sets referredBy = referrerId, grants WELCOME_BONUS (+100) via increment().
-   *    b) Updates/Creates referrer document: grants REFERRER_REWARD (+250) + increments referralsCount (+1) + increments earnedReferralCoins (+250).
-   *    c) Creates a separate document in global "referrals" collection with referrerId, referredId, referredName, rewardAmount, timestamp.
+   * Works both for brand-new users AND existing users who entered the app previously without a referral link!
    */
   processReferral: async (params: {
     currentUserId: string;
@@ -318,14 +384,29 @@ export const referralService = {
     }
 
     myReferralsClientCache.delete(referrerId);
+    myReferralsClientCache.delete(currentUserId);
 
     try {
+      const clientCachedUser = getClientCachedUser(currentUserId);
       const res = await callBackendApi('/referrals/process', {
         method: 'POST',
-        body: JSON.stringify({ referrerId }),
+        body: JSON.stringify({ referrerId, clientCachedUser }),
       });
-      if (res?.applied || res?.user?.referredBy) {
+      if (res?.applied || res?.welcomeGiftGranted || hasValidReferrer(res?.user, currentUserId)) {
         clearPendingReferrer();
+      }
+      if (res?.applied || res?.welcomeGiftGranted) {
+        try {
+          window.dispatchEvent(
+            new CustomEvent('kitty:referral-gift-unlocked', {
+              detail: {
+                amountUsdt: REFERRAL_CONFIG.WELCOME_BONUS_USDT,
+                amountKitty: REFERRAL_CONFIG.WELCOME_BONUS,
+                referrerId,
+              },
+            })
+          );
+        } catch {}
       }
       return res;
     } catch (err) {
@@ -347,10 +428,10 @@ export const referralService = {
           transaction.get(referrerUserRef),
         ]);
 
-        // Check if current user was already referred before
+        // Check if current user was already validly referred before
         if (referredSnap.exists()) {
           const existingData = referredSnap.data();
-          if (existingData.referredBy || existingData.referrerId) {
+          if (hasValidReferrer(existingData, currentUserId)) {
             return;
           }
         }
@@ -372,7 +453,7 @@ export const referralService = {
           currentUserUsername ||
           `Miner #${currentUserId.slice(-4)}`;
 
-        // Step A: Update or Create the referred user's document
+        // Step A: Update or Create the referred user's document with +2 USDT & +100 KITTY welcome gift
         if (!referredSnap.exists()) {
           transaction.set(referredUserRef, {
             id: currentUserId,
@@ -380,7 +461,8 @@ export const referralService = {
             lastName: currentUserLastName,
             username: currentUserUsername,
             balanceKitty: REFERRAL_CONFIG.WELCOME_BONUS,
-            balanceUsdt: 0,
+            balanceUsdt: REFERRAL_CONFIG.WELCOME_BONUS_USDT,
+            welcomeUsdtGranted: true,
             miningSpeed: REFERRAL_CONFIG.DEFAULT_BASE_SPEED,
             referralCount: 0,
             referralsCount: 0,
@@ -398,7 +480,9 @@ export const referralService = {
             referredBy: referrerId,
             referrerId: referrerId,
             referredAt: now,
+            welcomeUsdtGranted: true,
             balanceKitty: increment(REFERRAL_CONFIG.WELCOME_BONUS),
+            balanceUsdt: increment(REFERRAL_CONFIG.WELCOME_BONUS_USDT),
           });
         }
 
@@ -452,6 +536,17 @@ export const referralService = {
 
       if (applied) {
         clearPendingReferrer();
+        try {
+          window.dispatchEvent(
+            new CustomEvent('kitty:referral-gift-unlocked', {
+              detail: {
+                amountUsdt: REFERRAL_CONFIG.WELCOME_BONUS_USDT,
+                amountKitty: REFERRAL_CONFIG.WELCOME_BONUS,
+                referrerId,
+              },
+            })
+          );
+        } catch {}
       }
 
       return { applied };
@@ -527,8 +622,8 @@ export const referralService = {
   },
 
   /**
-   * Queries the "referrals" collection where('referrerId', '==', userId) ordered descending by timestamp
-   * Uses a 2-minute client memory cache to prevent redundant reads on tab navigation.
+   * Queries the user's referrals from the backend server ledger (0 Firestore reads!)
+   * and automatically reconciles the user's referralsCount, earnedReferralCoins, and balanceKitty.
    */
   getMyReferrals: async (
     userId: string,
@@ -547,7 +642,7 @@ export const referralService = {
       if (res && Array.isArray(res.referrals)) {
         myReferralsClientCache.set(userId, {
           data: res.referrals,
-          expiresAt: now + 2 * 60 * 1000,
+          expiresAt: now + 10 * 1000, // 10-second short cache since backend ledger costs 0 Firestore reads
         });
         return res.referrals;
       }
@@ -582,7 +677,7 @@ export const referralService = {
 
       myReferralsClientCache.set(userId, {
         data: items,
-        expiresAt: now + 2 * 60 * 1000,
+        expiresAt: now + 30 * 1000,
       });
       return items;
     } catch {
@@ -590,4 +685,5 @@ export const referralService = {
     }
   },
 };
+
 

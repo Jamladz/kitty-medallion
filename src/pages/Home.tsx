@@ -98,27 +98,27 @@ export default function Home() {
   const strokeDashoffset = circumference - progressRatio * circumference;
 
   return (
-    <div className="flex min-h-full flex-col items-center px-5 pt-6 pb-8">
+    <div className="flex min-h-full flex-col items-center px-4 sm:px-5 pt-4 sm:pt-6 pb-6">
       {/* Top Compact Status Strip */}
-      <div className="w-full flex items-center justify-between mb-4">
-        <div className="flex items-center space-x-2">
+      <div className="w-full flex items-center justify-between gap-2 mb-3 sm:mb-4">
+        <div className="flex items-center space-x-2 min-w-0">
           <img
             src={LOGO_URL}
             alt="Kitty Medallion"
             referrerPolicy="no-referrer"
-            className="h-6 w-6 rounded-full object-contain"
+            className="h-6 w-6 shrink-0 rounded-full object-contain"
           />
-          <span className="font-display text-sm font-bold tracking-tight text-white">
+          <span className="font-display text-sm font-bold tracking-tight text-white truncate">
             Kitty Medallion
           </span>
         </div>
 
-        <div className="flex items-center space-x-1.5 text-xs font-medium text-zinc-400">
+        <div className="flex items-center space-x-1.5 text-xs font-medium text-zinc-400 shrink-0">
           <img
             src={USDT_LOGO_URL}
             alt="USDT"
             referrerPolicy="no-referrer"
-            className="h-4 w-4 rounded-full object-contain"
+            className="h-4 w-4 shrink-0 rounded-full object-contain"
           />
           <span className="font-mono tabular-nums text-emerald-400 font-semibold">
             ≈ {usdtEquivalent.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -128,27 +128,27 @@ export default function Home() {
       </div>
 
       {/* Total Claimed Balance Readout */}
-      <div className="mb-3 text-center">
-        <p className="mb-1 text-xs font-medium text-zinc-400">
+      <div className="mb-2 sm:mb-3 text-center w-full">
+        <p className="mb-1 text-[11px] sm:text-xs font-medium text-zinc-400">
           Total Wallet Balance
         </p>
         <div className="flex items-center justify-center space-x-2">
           <img
             src={LOGO_URL}
-            className="h-7 w-7 rounded-full object-contain"
+            className="h-6 w-6 sm:h-7 sm:w-7 shrink-0 rounded-full object-contain"
             alt="KITTY"
             referrerPolicy="no-referrer"
           />
-          <span className="font-display text-4xl font-extrabold tabular-nums tracking-tight text-white">
+          <span className="font-display text-3xl sm:text-4xl font-extrabold tabular-nums tracking-tight text-white truncate">
             {Math.floor(walletBalance).toLocaleString()}
           </span>
         </div>
       </div>
 
       {/* Central Medallion with 24-Hour SVG Circular Progress Halo */}
-      <div className="relative my-2 flex items-center justify-center">
+      <div className="relative my-1.5 sm:my-2 flex items-center justify-center">
         <div
-          className={`pointer-events-none absolute h-48 w-48 rounded-full blur-2xl transition-colors duration-500 ${
+          className={`pointer-events-none absolute h-44 w-44 sm:h-48 sm:w-48 rounded-full blur-2xl transition-colors duration-500 ${
             isCycleReady
               ? 'bg-gradient-to-tr from-emerald-500/25 via-amber-500/20 to-transparent'
               : 'bg-gradient-to-tr from-amber-500/20 via-orange-500/15 to-transparent'
@@ -156,7 +156,7 @@ export default function Home() {
         />
 
         {/* SVG Circular Progress Gauge */}
-        <svg className="h-52 w-52 -rotate-90 transform" viewBox="0 0 200 200">
+        <svg className="h-44 w-44 sm:h-52 sm:w-52 -rotate-90 transform" viewBox="0 0 200 200">
           <circle
             cx="100"
             cy="100"
@@ -191,50 +191,50 @@ export default function Home() {
             src={LOGO_URL}
             alt="Kitty Medallion"
             referrerPolicy="no-referrer"
-            className="h-32 w-32 object-contain drop-shadow-[0_14px_32px_rgba(245,158,11,0.38)]"
+            className="h-28 w-28 sm:h-32 sm:w-32 object-contain drop-shadow-[0_14px_32px_rgba(245,158,11,0.38)]"
           />
         </motion.div>
       </div>
 
       {/* 24-Hour Mining Session Card & Claim / Countdown Controller */}
-      <div className="w-full rounded-3xl bg-[#141419] p-5 border border-white/[0.06] shadow-xl mt-2">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <span className="text-xs font-medium text-zinc-400">
+      <div className="w-full rounded-3xl bg-[#141419] p-4 sm:p-5 border border-white/[0.06] shadow-xl mt-1.5 sm:mt-2">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div className="min-w-0">
+            <span className="text-[11px] sm:text-xs font-medium text-zinc-400">
               24h Session Mined
             </span>
             <div className="mt-1 flex items-center space-x-1.5">
               <img
                 src={LOGO_URL}
-                className="h-5 w-5 rounded-full object-contain"
+                className="h-4 w-4 sm:h-5 sm:w-5 shrink-0 rounded-full object-contain"
                 alt="KITTY"
                 referrerPolicy="no-referrer"
               />
-              <span className="font-mono text-xl font-bold tabular-nums text-white">
+              <span className="font-mono text-lg sm:text-xl font-bold tabular-nums text-white truncate">
                 {sessionMined.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
               </span>
-              <span className="font-mono text-xs text-zinc-500 tabular-nums">
+              <span className="font-mono text-[11px] sm:text-xs text-zinc-500 tabular-nums shrink-0">
                 / {miningSpeed.toLocaleString()}
               </span>
             </div>
           </div>
 
-          <div className="text-right">
-            <span className="text-xs font-medium text-zinc-400">
+          <div className="text-right shrink-0">
+            <span className="text-[11px] sm:text-xs font-medium text-zinc-400">
               {isCycleReady ? 'Cycle Status' : 'Next Claim In'}
             </span>
             <div className="mt-1 flex items-center justify-end space-x-1.5">
               {isCycleReady ? (
-                <span className="flex items-center space-x-1 font-mono text-sm font-bold text-emerald-400">
-                  <CheckCircle2 size={15} />
+                <span className="flex items-center space-x-1 font-mono text-xs sm:text-sm font-bold text-emerald-400">
+                  <CheckCircle2 size={14} />
                   <span>Ready</span>
                 </span>
               ) : (
-                <span className="flex items-center space-x-1 font-mono text-sm font-bold tabular-nums text-amber-400">
-                  <Clock size={14} className="text-amber-500" />
+                <span className="flex items-center space-x-1 font-mono text-xs sm:text-sm font-bold tabular-nums text-amber-400">
+                  <Clock size={13} className="text-amber-500" />
                   <span>{formatDuration(remainingMs)}</span>
                 </span>
               )}

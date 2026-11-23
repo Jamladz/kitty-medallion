@@ -5,6 +5,7 @@ import { api, getEffectiveTelegramUser } from '../lib/api';
 import {
   detectReferrerOnLaunch,
   clearPendingReferrer,
+  hasValidReferrer,
   referralService,
   REFERRAL_CONFIG,
 } from '../lib/referralService';
@@ -81,15 +82,52 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const handleUserUpdatedEvent = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail && customEvent.detail.id) {
+        setUser(customEvent.detail);
+        saveCachedUser(String(customEvent.detail.id), customEvent.detail);
+      }
+    };
+
+    window.addEventListener('kitty:user-updated', handleUserUpdatedEvent);
+    return () => {
+      window.removeEventListener('kitty:user-updated', handleUserUpdatedEvent);
+    };
+  }, []);
+
+  useEffect(() => {
     let unsubscribe: (() => void) | undefined;
 
-    const initAuth = async () => {
-      const effectiveUser = getEffectiveTelegramUser();
-      const userId = effectiveUser.id;
-      const firstName = effectiveUser.first_name || 'Miner';
-      const lastName = effectiveUser.last_name || '';
-      const username = effectiveUser.username || '';
+    const effectiveUser = getEffectiveTelegramUser();
+    const userId = effectiveUser.id;
+    const firstName = effectiveUser.first_name || 'Miner';
+    const lastName = effectiveUser.last_name || '';
+    const username = effectiveUser.username || '';
 
+    const checkAndProcessReferralIfNeeded = async () => {
+      const currentCached = getCachedUser(userId);
+      const detectedRef = detectReferrerOnLaunch(userId);
+      if (detectedRef && !hasValidReferrer(currentCached, userId)) {
+        try {
+          const refRes = await referralService.processReferral({
+            currentUserId: userId,
+            currentUserFirstName: firstName,
+            currentUserLastName: lastName,
+            currentUserUsername: username,
+            rawReferrerParam: detectedRef,
+          });
+          if (refRes?.user) {
+            setUser(refRes.user);
+            saveCachedUser(userId, refRes.user);
+          }
+        } catch (err) {
+          console.warn('Referral attribution check warning:', err);
+        }
+      }
+    };
+
+    const initAuth = async () => {
       try {
         const webApp = window.Telegram?.WebApp;
         if (webApp) {
@@ -119,20 +157,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         //    b) Fallback: query & hash parameters (startapp / ref / start)
         const referrerId = detectReferrerOnLaunch(userId);
 
-        // 2. Authenticate with server (which verifies Telegram initData & runs atomic referral transaction)
+        // 2. Authenticate with server (passes cached user so existing unreferred users preserve progress and get referred!)
         let authSuccess = false;
         let serverReferralApplied = false;
         try {
-          const authData = await api.auth(referrerId || undefined);
+          const authData = await api.auth(referrerId || undefined, cached);
           if (authData && !authData.fallback && authData.user) {
             authSuccess = true;
             serverReferralApplied = Boolean(
               authData.referralApplied ||
-                authData.user?.referredBy ||
-                authData.user?.referrerId
+                hasValidReferrer(authData.user, userId)
             );
             if (serverReferralApplied) {
               clearPendingReferrer();
+            }
+            if (authData.referralApplied || authData.welcomeGiftGranted) {
+              try {
+                window.dispatchEvent(
+                  new CustomEvent('kitty:referral-gift-unlocked', {
+                    detail: {
+                      amountUsdt: REFERRAL_CONFIG.WELCOME_BONUS_USDT,
+                      amountKitty: REFERRAL_CONFIG.WELCOME_BONUS,
+                      referrerId: authData.user.referredBy || referrerId,
+                    },
+                  })
+                );
+              } catch {}
             }
             setUser(authData.user);
             saveCachedUser(userId, authData.user);
@@ -145,7 +195,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           );
         }
 
-        // 3. Guarantee referral attribution: if a referrerId was detected and not yet applied, run referralService.processReferral
+        // 3. Guarantee referral attribution: even if user entered previously without a link,
+        //    if they are not yet validly referred and opened a referral link now, attribute it!
         if (referrerId && !serverReferralApplied) {
           try {
             const refRes = await referralService.processReferral({
@@ -197,14 +248,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             (docSnap) => {
               if (docSnap.exists()) {
                 const liveData = docSnap.data();
-                setUser(liveData);
-                saveCachedUser(userId, liveData);
+                setUser((prev: any) => {
+                  // Never let a stale Firestore snapshot overwrite a higher referral count from serverLedger
+                  const prevRefs = Math.max(
+                    Number(prev?.referralsCount) || 0,
+                    Number(prev?.referralCount) || 0
+                  );
+                  const snapRefs = Math.max(
+                    Number(liveData?.referralsCount) || 0,
+                    Number(liveData?.referralCount) || 0
+                  );
+                  if (prev && prevRefs > snapRefs) {
+                    return prev;
+                  }
+                  saveCachedUser(userId, liveData);
+                  return liveData;
+                });
               }
               setLoading(false);
             },
             (snapErr) => {
               console.warn(
-                'Firestore snapshot listener paused (using cached/API user state):',
+                'Firestore snapshot listener paused (using server ledger / API user state):',
                 snapErr.message
               );
               setUser((prev: any) =>
@@ -215,7 +280,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
               setLoading(false);
             }
           );
-        } catch (listenErr) {
+        } catch {
           setUser((prev: any) =>
             prev ||
             getCachedUser(userId) ||
@@ -236,22 +301,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     initAuth();
 
+    // 5. Re-check referral parameters and sync server ledger when app resumes or URL changes
+    const handleAppResumeOrUrlChange = () => {
+      if (document.visibilityState === 'hidden') return;
+      checkAndProcessReferralIfNeeded();
+      // Sync user state with server ledger (0 Firestore reads!) so inviter sees new referrals immediately
+      api.getReferrals().catch(() => {});
+    };
+
+    window.addEventListener('focus', handleAppResumeOrUrlChange);
+    window.addEventListener('hashchange', handleAppResumeOrUrlChange);
+    window.addEventListener('popstate', handleAppResumeOrUrlChange);
+    document.addEventListener('visibilitychange', handleAppResumeOrUrlChange);
+
     return () => {
       if (unsubscribe) unsubscribe();
+      window.removeEventListener('focus', handleAppResumeOrUrlChange);
+      window.removeEventListener('hashchange', handleAppResumeOrUrlChange);
+      window.removeEventListener('popstate', handleAppResumeOrUrlChange);
+      document.removeEventListener('visibilitychange', handleAppResumeOrUrlChange);
     };
   }, []);
 
   const refreshMining = async () => {
     try {
       const res = await api.claimMining();
-      if (res && res.success && user) {
-        const updated = {
-          ...user,
-          balanceKitty: (user.balanceKitty || 0) + (res.claimed || 0),
-          lastMiningClaim: Date.now(),
-        };
-        setUser(updated);
-        saveCachedUser(String(user.id), updated);
+      if (res && res.success) {
+        if (res.user) {
+          setUser(res.user);
+          saveCachedUser(String(res.user.id), res.user);
+        } else if (user) {
+          const updated = {
+            ...user,
+            balanceKitty: (user.balanceKitty || 0) + (res.claimed || res.earned || 0),
+            lastMiningClaim: Date.now(),
+          };
+          setUser(updated);
+          saveCachedUser(String(user.id), updated);
+        }
       }
     } catch (e) {
       console.error('Failed to claim mining', e);
@@ -264,3 +351,4 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     </AuthContext.Provider>
   );
 };
+

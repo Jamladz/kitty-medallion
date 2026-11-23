@@ -83,10 +83,10 @@ export default function Referral() {
     }
   };
 
-  // Load user's referrals (uses 2-minute cache unless forced)
+  // Load user's referrals from backend server ledger (0 Firestore reads)
   useEffect(() => {
-    loadFriendsList(false);
-  }, [userId]);
+    loadFriendsList(true);
+  }, [userId, activeTab]);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(referralLink);
@@ -142,11 +142,11 @@ export default function Referral() {
       : 0;
 
   return (
-    <div className="flex flex-col px-5 pt-6 pb-10">
+    <div className="flex flex-col px-4 sm:px-5 pt-4 sm:pt-6 pb-8">
       {/* Header & VIP Status */}
-      <div className="mb-5 flex items-start justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-white">
+      <div className="mb-4 sm:mb-5 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-white">
             Referral Hub
           </h1>
           <p className="mt-1 text-xs text-zinc-400">
@@ -155,7 +155,7 @@ export default function Referral() {
         </div>
 
         {vipDaysRemaining > 0 && (
-          <div className="flex items-center space-x-1.5 rounded-2xl bg-amber-500/15 px-3 py-1.5 border border-amber-500/30 text-amber-300">
+          <div className="flex shrink-0 items-center space-x-1.5 rounded-2xl bg-amber-500/15 px-3 py-1.5 border border-amber-500/30 text-amber-300">
             <Crown size={14} className="text-amber-400" />
             <span className="font-mono text-xs font-bold tabular-nums">
               VIP · {vipDaysRemaining}d
@@ -165,40 +165,40 @@ export default function Referral() {
       </div>
 
       {/* KPI Summary Banner */}
-      <div className="mb-4 rounded-3xl bg-gradient-to-br from-amber-500/20 via-orange-500/10 to-[#141419] p-5 border border-amber-500/25 shadow-xl">
-        <div className="flex items-center justify-between mb-3.5">
+      <div className="mb-4 rounded-3xl bg-gradient-to-br from-amber-500/20 via-orange-500/10 to-[#141419] p-4 sm:p-5 border border-amber-500/25 shadow-xl">
+        <div className="flex items-center justify-between mb-3">
           <span className="text-xs font-semibold text-amber-200/90">
             Your Referral Telemetry
           </span>
           <Sparkles size={15} className="text-amber-400" />
         </div>
 
-        <div className="grid grid-cols-3 gap-2.5">
-          <div className="flex flex-col rounded-2xl bg-[#0b0b0e]/80 p-3.5 border border-white/[0.06]">
-            <span className="text-[11px] text-zinc-400">Referrals</span>
-            <span className="mt-1.5 font-display text-xl font-extrabold tabular-nums text-white">
+        <div className="grid grid-cols-3 gap-2 sm:gap-2.5">
+          <div className="flex min-w-0 flex-col rounded-2xl bg-[#0b0b0e]/80 p-2.5 sm:p-3.5 border border-white/[0.06]">
+            <span className="text-[10px] sm:text-[11px] text-zinc-400 truncate">Referrals</span>
+            <span className="mt-1 sm:mt-1.5 font-display text-base sm:text-xl font-extrabold tabular-nums text-white truncate">
               {referralsCount.toLocaleString()}
             </span>
           </div>
 
-          <div className="flex flex-col rounded-2xl bg-[#0b0b0e]/80 p-3.5 border border-white/[0.06]">
-            <span className="text-[11px] text-zinc-400">Earned KITTY</span>
-            <div className="mt-1.5 flex items-center space-x-1">
+          <div className="flex min-w-0 flex-col rounded-2xl bg-[#0b0b0e]/80 p-2.5 sm:p-3.5 border border-white/[0.06]">
+            <span className="text-[10px] sm:text-[11px] text-zinc-400 truncate">Earned KITTY</span>
+            <div className="mt-1 sm:mt-1.5 flex items-center space-x-1 min-w-0">
               <img
                 src={LOGO_URL}
-                className="h-4 w-4 rounded-full object-contain"
+                className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0 rounded-full object-contain"
                 alt="KITTY"
                 referrerPolicy="no-referrer"
               />
-              <span className="font-display text-xl font-extrabold tabular-nums text-amber-400">
+              <span className="font-display text-base sm:text-xl font-extrabold tabular-nums text-amber-400 truncate">
                 +{earnedReferralCoins.toLocaleString()}
               </span>
             </div>
           </div>
 
-          <div className="flex flex-col rounded-2xl bg-[#0b0b0e]/80 p-3.5 border border-white/[0.06]">
-            <span className="text-[11px] text-zinc-400">Speed Boost</span>
-            <span className="mt-1.5 font-display text-xl font-extrabold tabular-nums text-emerald-400">
+          <div className="flex min-w-0 flex-col rounded-2xl bg-[#0b0b0e]/80 p-2.5 sm:p-3.5 border border-white/[0.06]">
+            <span className="text-[10px] sm:text-[11px] text-zinc-400 truncate">Speed Boost</span>
+            <span className="mt-1 sm:mt-1.5 font-display text-base sm:text-xl font-extrabold tabular-nums text-emerald-400 truncate">
               +{(referralsCount * REFERRAL_CONFIG.REFERRER_SPEED_BOOST).toLocaleString()}
             </span>
           </div>
@@ -207,14 +207,15 @@ export default function Referral() {
 
       {/* Invite Link & Direct Telegram Share Button */}
       <div className="mb-5 rounded-3xl bg-[#141419] p-4 border border-white/[0.06] space-y-3 shadow-xl">
-        <div className="flex items-center justify-between text-xs text-zinc-400 px-1">
+        <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] sm:text-xs text-zinc-400 px-1">
           <span>
             Inviter: <strong className="text-amber-400">+{REFERRAL_CONFIG.REFERRER_REWARD} KITTY</strong> &{' '}
             <strong className="text-emerald-400">+{REFERRAL_CONFIG.REFERRER_SPEED_BOOST}/24h</strong>
           </span>
           <span>·</span>
           <span>
-            Friend: <strong className="text-white">+{REFERRAL_CONFIG.WELCOME_BONUS} KITTY</strong>
+            Friend Gift: <strong className="text-emerald-400">+{REFERRAL_CONFIG.WELCOME_BONUS_USDT} USDT</strong> &{' '}
+            <strong className="text-white">+{REFERRAL_CONFIG.WELCOME_BONUS} KITTY</strong>
           </span>
         </div>
 

@@ -55,9 +55,9 @@ export default function WalletPage() {
   const maxSwappableUsdt = Math.floor((balanceKitty / RATE) * 100) / 100;
 
   return (
-    <div className="flex flex-col px-5 pt-6 pb-8 h-full">
-      <div className="mb-5">
-        <h1 className="font-display text-2xl font-bold tracking-tight text-white">
+    <div className="flex min-h-full flex-col px-4 sm:px-5 pt-4 sm:pt-6 pb-8">
+      <div className="mb-4 sm:mb-5">
+        <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-white">
           Wallet
         </h1>
         <p className="mt-1 text-xs text-zinc-400">
@@ -66,22 +66,22 @@ export default function WalletPage() {
       </div>
 
       {/* Slender Stacked Asset Cards with frameless inline logos before numbers */}
-      <div className="mb-6 flex flex-col space-y-2.5">
+      <div className="mb-5 flex flex-col space-y-2.5">
         {/* Kitty Medallion Slender Asset Row */}
-        <div className="flex items-center justify-between rounded-2xl bg-[#141419] py-3 px-4 border border-white/[0.06] shadow-md">
-          <div className="flex flex-col">
-            <span className="font-display font-bold text-white text-sm leading-tight">
+        <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#141419] py-3 px-4 border border-white/[0.06] shadow-md">
+          <div className="flex flex-col min-w-0">
+            <span className="font-display font-bold text-white text-sm leading-tight truncate">
               Kitty Medallion
             </span>
             <span className="text-[11px] font-medium text-zinc-500 mt-0.5">
               KITTY
             </span>
           </div>
-          <div className="flex flex-col items-end">
+          <div className="flex flex-col items-end shrink-0">
             <div className="flex items-center space-x-1.5">
               <img
                 src={LOGO_URL}
-                className="h-5 w-5 rounded-full object-contain"
+                className="h-5 w-5 shrink-0 rounded-full object-contain"
                 alt="KITTY"
                 referrerPolicy="no-referrer"
               />
@@ -100,20 +100,20 @@ export default function WalletPage() {
         </div>
 
         {/* Tether USDT Slender Asset Row */}
-        <div className="flex items-center justify-between rounded-2xl bg-[#141419] py-3 px-4 border border-white/[0.06] shadow-md">
-          <div className="flex flex-col">
-            <span className="font-display font-bold text-white text-sm leading-tight">
+        <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#141419] py-3 px-4 border border-white/[0.06] shadow-md">
+          <div className="flex flex-col min-w-0">
+            <span className="font-display font-bold text-white text-sm leading-tight truncate">
               Tether USD
             </span>
             <span className="text-[11px] font-medium text-zinc-500 mt-0.5">
               USDT
             </span>
           </div>
-          <div className="flex flex-col items-end">
+          <div className="flex flex-col items-end shrink-0">
             <div className="flex items-center space-x-1.5">
               <img
                 src={USDT_LOGO_URL}
-                className="h-5 w-5 rounded-full object-contain"
+                className="h-5 w-5 shrink-0 rounded-full object-contain"
                 alt="USDT"
                 referrerPolicy="no-referrer"
               />

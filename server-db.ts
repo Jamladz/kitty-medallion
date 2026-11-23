@@ -57,9 +57,13 @@ export class CollectionWrapper {
           data: () => snap.data()
         };
       },
-      set: async (data: any) => {
+      set: async (data: any, options?: { merge?: boolean }) => {
         const docRef = doc(clientDb, this.path, finalId);
-        await setDoc(docRef, data);
+        if (options && options.merge) {
+          await setDoc(docRef, data, { merge: true });
+        } else {
+          await setDoc(docRef, data);
+        }
       },
       update: async (data: any) => {
         const docRef = doc(clientDb, this.path, finalId);
