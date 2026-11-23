@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from './AuthProvider';
-import { hasValidReferrer, REFERRAL_CONFIG } from '../lib/referralService';
+import { hasValidReferrer } from '../lib/referrals';
+import { REFERRAL_CONFIG } from '../lib/rewardsEngine';
+import { triggerTelegramHaptic } from '../lib/telegram';
 import { Gift, CheckCircle2, X, Wallet } from 'lucide-react';
 
 const USDT_LOGO_URL = 'https://i.ibb.co/N2WMd6QC/Tether-USDT.png';
@@ -67,9 +69,7 @@ export const ReferralWelcomeSheet: React.FC = () => {
   }, [user, userId, storageKey]);
 
   const handleClaimGift = () => {
-    try {
-      (window.Telegram?.WebApp as any)?.HapticFeedback?.notificationOccurred?.('success');
-    } catch {}
+    triggerTelegramHaptic('success');
     setClaimedState(true);
     setTimeout(() => {
       closeSheet();

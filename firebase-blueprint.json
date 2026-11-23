@@ -11,6 +11,7 @@
         "username": { "type": "string" },
         "balanceKitty": { "type": "number" },
         "balanceUsdt": { "type": "number" },
+        "welcomeUsdtGranted": { "type": "boolean" },
         "miningSpeed": { "type": "number" },
         "referralCount": { "type": "number" },
         "referralsCount": { "type": "number" },
@@ -41,6 +42,7 @@
         "referredUsername": { "type": "string" },
         "rewardAmount": { "type": "number" },
         "welcomeBonus": { "type": "number" },
+        "welcomeBonusUsdt": { "type": "number" },
         "speedBoost": { "type": "number" },
         "timestamp": { "type": "number" }
       },

@@ -29,6 +29,7 @@ service cloud.firestore {
                     && isBoundedIncrement('referralCount', 50)
                     && isBoundedIncrement('earnedReferralCoins', 25000)
                     && isBoundedIncrement('balanceKitty', 50000)
+                    && isBoundedIncrement('balanceUsdt', 100)
                     && isValidMilestoneUpdate()
                     && isReferredByValidTransition();
     }
@@ -67,6 +68,10 @@ service cloud.firestore {
 
     match /system/{docId} {
       allow read, write: if true;
+    }
+
+    match /test/{docId} {
+      allow read: if true;
     }
   }
 }

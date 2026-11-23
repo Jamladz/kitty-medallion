@@ -1,9 +1,9 @@
 import { db } from './firebase';
+import { getEffectiveTelegramUser, getTelegramInitData } from './telegram';
 import { 
   doc, 
   getDoc, 
   getDocs, 
-  setDoc, 
   updateDoc, 
   collection, 
   query, 
@@ -13,12 +13,7 @@ import {
   runTransaction 
 } from 'firebase/firestore';
 
-const getInitData = () => {
-  if (typeof window !== 'undefined' && window.Telegram && window.Telegram.WebApp) {
-    return window.Telegram.WebApp.initData || '';
-  }
-  return '';
-};
+export { getEffectiveTelegramUser };
 
 export const notifyUserUpdated = (user: any) => {
   if (typeof window === 'undefined' || !user || !user.id) return;
@@ -39,113 +34,12 @@ export const getClientCachedUser = (userId: string) => {
   return null;
 };
 
-export const getEffectiveTelegramUser = () => {
-  if (typeof window !== 'undefined') {
-    const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
-    if (tgUser && tgUser.id) {
-      return {
-        id: String(tgUser.id),
-        first_name: tgUser.first_name || 'Miner',
-        last_name: tgUser.last_name || '',
-        username: tgUser.username || ''
-      };
-    }
-
-    // Also try parsing raw initData if initDataUnsafe was not populated yet
-    const rawInit = window.Telegram?.WebApp?.initData;
-    if (rawInit) {
-      try {
-        const userJson = new URLSearchParams(rawInit).get('user');
-        if (userJson) {
-          const parsed = JSON.parse(userJson);
-          if (parsed && parsed.id) {
-            return {
-              id: String(parsed.id),
-              first_name: parsed.first_name || 'Miner',
-              last_name: parsed.last_name || '',
-              username: parsed.username || ''
-            };
-          }
-        }
-      } catch {}
-    }
-
-    // Also inspect #tgWebAppData in window.location.hash in case Telegram passed user there
-    try {
-      const hashStr = window.location.hash.replace(/^#/, '');
-      const hashParams = new URLSearchParams(hashStr);
-      const tgWebAppData = hashParams.get('tgWebAppData');
-      if (tgWebAppData) {
-        const userJson = new URLSearchParams(tgWebAppData).get('user');
-        if (userJson) {
-          const parsed = JSON.parse(userJson);
-          if (parsed && parsed.id) {
-            return {
-              id: String(parsed.id),
-              first_name: parsed.first_name || 'Miner',
-              last_name: parsed.last_name || '',
-              username: parsed.username || ''
-            };
-          }
-        }
-      }
-    } catch {}
-
-    // Outside Telegram (browser preview): if opened with a referral parameter (?startapp=ref_... or ?ref=...),
-    // generate/persist a unique visitor ID per browser tab if the referrer is 999999999 so testing doesn't self-refer
-    try {
-      const search = new URLSearchParams(window.location.search);
-      const hasReferralParam = Boolean(
-        search.get('startapp') ||
-          search.get('ref') ||
-          search.get('start') ||
-          search.get('tgWebAppStartParam')
-      );
-      const storedVisitorId = sessionStorage.getItem('kitty_browser_visitor_id');
-      if (storedVisitorId) {
-        return {
-          id: storedVisitorId,
-          first_name: 'Invited',
-          last_name: `Fren #${storedVisitorId.slice(-4)}`,
-          username: `fren_${storedVisitorId.slice(-4)}`
-        };
-      }
-      if (hasReferralParam) {
-        const rawRef =
-          search.get('startapp') ||
-          search.get('ref') ||
-          search.get('start') ||
-          search.get('tgWebAppStartParam') ||
-          '';
-        const cleanedRef = rawRef.replace(/^(ref_|r_|ref-|invite_)/i, '').trim();
-        if (cleanedRef === '999999999') {
-          const generatedId = String(Math.floor(100000000 + Math.random() * 800000000));
-          sessionStorage.setItem('kitty_browser_visitor_id', generatedId);
-          return {
-            id: generatedId,
-            first_name: 'Invited',
-            last_name: `Fren #${generatedId.slice(-4)}`,
-            username: `fren_${generatedId.slice(-4)}`
-          };
-        }
-      }
-    } catch {}
-  }
-
-  return {
-    id: '999999999',
-    first_name: 'Developer',
-    last_name: 'User',
-    username: 'dev_user'
-  };
-};
-
 const getUserId = () => {
   return getEffectiveTelegramUser().id;
 };
 
 const fetchApi = async (path: string, options: RequestInit = {}) => {
-  const initData = getInitData();
+  const initData = getTelegramInitData();
   const effectiveUser = getEffectiveTelegramUser();
   const headers = {
     'Content-Type': 'application/json',

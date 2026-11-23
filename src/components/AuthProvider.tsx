@@ -1,14 +1,14 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { db } from '../lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
-import { api, getEffectiveTelegramUser } from '../lib/api';
+import { api } from '../lib/api';
 import {
+  getEffectiveTelegramUser,
   detectReferrerOnLaunch,
   clearPendingReferrer,
-  hasValidReferrer,
-  referralService,
-  REFERRAL_CONFIG,
-} from '../lib/referralService';
+} from '../lib/telegram';
+import { REFERRAL_CONFIG } from '../lib/rewardsEngine';
+import { hasValidReferrer, referralService } from '../lib/referrals';
 
 interface AuthContextType {
   user: any;

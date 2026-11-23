@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../components/AuthProvider';
 import { api } from '../lib/api';
+import { ReferralMilestone, ReferralRecord } from '../types';
 import {
   REFERRAL_CONFIG,
   REFERRAL_MILESTONES,
-  ReferralMilestone,
-  ReferralRecord,
-  referralService,
+  evaluateMilestoneProgress,
+  calculateTotalReferralStats,
+} from '../lib/rewardsEngine';
+import {
   buildReferralLink,
   buildTelegramShareUrl,
-} from '../lib/referralService';
+} from '../lib/telegram';
+import { referralService } from '../lib/referrals';
 import {
   Copy,
   Check,
@@ -122,14 +125,11 @@ export default function Referral() {
     }
   };
 
-  const referralsCount = Math.max(
-    user?.referralsCount || 0,
-    user?.referralCount || 0,
-    referrals.length
-  );
-  const earnedReferralCoins = Math.max(
-    user?.earnedReferralCoins || 0,
-    referralsCount * REFERRAL_CONFIG.REFERRER_REWARD
+  const { referralsCount, earnedReferralCoins } = calculateTotalReferralStats(
+    user?.referralsCount,
+    user?.referralCount,
+    referrals.length,
+    user?.earnedReferralCoins
   );
   const claimedMilestones: string[] = Array.isArray(user?.claimedMilestones)
     ? user.claimedMilestones
@@ -286,13 +286,8 @@ export default function Referral() {
       {activeTab === 'milestones' && (
         <div className="flex flex-col space-y-3">
           {REFERRAL_MILESTONES.map((m) => {
-            const isClaimed = claimedMilestones.includes(m.id);
-            const isUnlocked = referralsCount >= m.targetCount;
-            const canClaim = isUnlocked && !isClaimed;
-            const progressPct = Math.min(
-              100,
-              Math.round((referralsCount / m.targetCount) * 100)
-            );
+            const { isClaimed, canClaim, progressPct } =
+              evaluateMilestoneProgress(m, referralsCount, claimedMilestones);
 
             return (
               <div
