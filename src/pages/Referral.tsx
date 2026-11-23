@@ -58,7 +58,10 @@ export default function Referral() {
 
   const [referrals, setReferrals] = useState<ReferralRecord[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [loadingData, setLoadingData] = useState(true);
+  const [loadingFriends, setLoadingFriends] = useState(false);
+  const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
+  const [friendsLoaded, setFriendsLoaded] = useState(false);
+  const [leaderboardLoaded, setLeaderboardLoaded] = useState(false);
   const [claimingId, setClaimingId] = useState<string | null>(null);
 
   const userId = String(user?.id || '999999999');
@@ -73,44 +76,55 @@ export default function Referral() {
     });
   }, []);
 
+  // Lazy-load Friends list ONLY when user opens the 'friends' tab
   useEffect(() => {
+    if (activeTab !== 'friends' || friendsLoaded) return;
     let isMounted = true;
-    setLoadingData(true);
+    setLoadingFriends(true);
 
-    const loadInitial = async () => {
-      try {
-        const [myRefs, topLeaders] = await Promise.all([
-          referralService.getMyReferrals(userId),
-          referralService.getLeaderboard(userId, 15),
-        ]);
+    referralService
+      .getMyReferrals(userId)
+      .then((myRefs) => {
         if (!isMounted) return;
         setReferrals(myRefs);
-        setLeaderboard(topLeaders);
-      } catch (e) {
-        console.error('Error loading Referral Hub data:', e);
-      } finally {
-        if (isMounted) setLoadingData(false);
-      }
-    };
-
-    loadInitial();
-
-    // Real-time Firestore listener on the global "referrals" collection for instant live updates
-    const unsubscribeRefs = referralService.subscribeToMyReferrals(
-      userId,
-      (liveReferrals) => {
-        if (isMounted && liveReferrals.length > 0) {
-          setReferrals(liveReferrals);
-          setLoadingData(false);
-        }
-      }
-    );
+        setFriendsLoaded(true);
+      })
+      .catch((e) => {
+        console.error('Error loading referrals list:', e);
+      })
+      .finally(() => {
+        if (isMounted) setLoadingFriends(false);
+      });
 
     return () => {
       isMounted = false;
-      unsubscribeRefs();
     };
-  }, [userId, user?.referralsCount, user?.referralCount]);
+  }, [activeTab, userId, friendsLoaded]);
+
+  // Lazy-load Leaderboard ONLY when user opens the 'leaderboard' tab
+  useEffect(() => {
+    if (activeTab !== 'leaderboard' || leaderboardLoaded) return;
+    let isMounted = true;
+    setLoadingLeaderboard(true);
+
+    referralService
+      .getLeaderboard(userId, 10)
+      .then((topLeaders) => {
+        if (!isMounted) return;
+        setLeaderboard(topLeaders);
+        setLeaderboardLoaded(true);
+      })
+      .catch((e) => {
+        console.error('Error loading leaderboard:', e);
+      })
+      .finally(() => {
+        if (isMounted) setLoadingLeaderboard(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeTab, userId, leaderboardLoaded]);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(referralLink);
@@ -301,7 +315,7 @@ export default function Referral() {
           }`}
         >
           <Users size={14} />
-          <span>My Frens ({referrals.length})</span>
+          <span>My Frens ({referralsCount})</span>
         </button>
 
         <button
@@ -450,7 +464,7 @@ export default function Referral() {
             </span>
           </div>
 
-          {loadingData ? (
+          {loadingFriends ? (
             <div className="py-6 text-center text-xs text-zinc-500">
               Loading your referral ledger...
             </div>
@@ -519,7 +533,7 @@ export default function Referral() {
             <span className="text-[11px] text-zinc-500">By Referrals</span>
           </div>
 
-          {loadingData ? (
+          {loadingLeaderboard ? (
             <div className="py-6 text-center text-xs text-zinc-500">
               Loading leaderboard...
             </div>

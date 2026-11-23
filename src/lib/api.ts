@@ -126,6 +126,19 @@ const fetchApi = async (path: string, options: RequestInit = {}) => {
   return response.json();
 };
 
+const STATIC_TASKS = [
+  { id: 'telegram_channel', title: 'Join our Telegram Channel', description: 'Stay updated with the latest news.', reward: 1000, miningBoost: 50, type: 'social', isActive: true },
+  { id: 'twitter_follow', title: 'Follow us on X (Twitter)', description: 'Follow our official X account.', reward: 500, miningBoost: 20, type: 'social', isActive: true },
+  { id: 'home_screen', title: 'Add Kitty Medallion to Home Screen', description: 'Add Kitty Medallion to your phone\'s home screen for faster access and receive a Kitty Medallion reward.', reward: 2000, miningBoost: 100, type: 'home_screen', isActive: true },
+  { id: 'watch_ad', title: 'Watch an Ad', description: 'Support the project by watching a short ad.', reward: 500, miningBoost: 10, type: 'monetag', isActive: true }
+];
+
+// Client-side memory caches to prevent repeated Firestore reads on tab switching
+let clientTasksCache: { tasks: any[]; expiresAt: number } | null = null;
+let clientWithdrawalsCache: { withdrawals: any[]; expiresAt: number } | null = null;
+let clientEarlyStatusCache: { count: number; isClaimed: boolean; expiresAt: number } | null = null;
+let clientBotInfoCache: { botUsername: string; appShortName: string } | null = null;
+
 export const api = {
   auth: async (referrerId?: string) => {
     try {
@@ -173,53 +186,57 @@ export const api = {
     }
   },
 
-  getTasks: async () => {
+  getTasks: async (forceRefresh = false) => {
+    const now = Date.now();
+    if (!forceRefresh && clientTasksCache && clientTasksCache.expiresAt > now) {
+      return { tasks: clientTasksCache.tasks };
+    }
+
     try {
-      return await fetchApi('/tasks');
+      const res = await fetchApi('/tasks');
+      if (res && Array.isArray(res.tasks)) {
+        clientTasksCache = { tasks: res.tasks, expiresAt: now + 3 * 60 * 1000 };
+      }
+      return res;
     } catch (err) {
-      console.warn('API getTasks failed, using client-fallback to query Firestore directly', err);
+      console.warn('API getTasks failed, using client-fallback', err);
       const userId = getUserId();
-      const tasksSnap = await getDocs(query(collection(db, 'tasks'), where('isActive', '==', true)));
       const completionsSnap = await getDocs(collection(db, 'users', userId, 'task_completions'));
       const completedTaskIds = new Set(completionsSnap.docs.map(d => d.id));
       
-      const tasks = tasksSnap.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          isCompleted: completedTaskIds.has(doc.id)
-        };
-      });
+      const tasks = STATIC_TASKS.map(task => ({
+        ...task,
+        isCompleted: completedTaskIds.has(task.id)
+      }));
+      clientTasksCache = { tasks, expiresAt: now + 3 * 60 * 1000 };
       return { tasks };
     }
   },
 
   claimTask: async (taskId: string) => {
+    clientTasksCache = null; // Invalidate cache on claim
     try {
       return await fetchApi('/tasks/claim', { method: 'POST', body: JSON.stringify({ taskId }) });
     } catch (err) {
       console.warn('API claimTask failed, using client-fallback for direct Firestore transaction', err);
       const userId = getUserId();
+      const staticTask = STATIC_TASKS.find(t => t.id === taskId);
+      if (!staticTask) throw new Error('Task not found');
       
       await runTransaction(db, async (transaction) => {
-        const taskRef = doc(db, 'tasks', taskId);
         const completionRef = doc(db, 'users', userId, 'task_completions', taskId);
         const userRef = doc(db, 'users', userId);
         
-        const taskSnap = await transaction.get(taskRef);
         const compSnap = await transaction.get(completionRef);
         const userSnap = await transaction.get(userRef);
         
-        if (!taskSnap.exists()) throw new Error('Task not found');
         if (compSnap.exists()) throw new Error('Already completed');
         if (!userSnap.exists()) throw new Error('User not found');
         
-        const task = taskSnap.data();
         transaction.set(completionRef, { completedAt: Date.now() });
         transaction.update(userRef, {
-          balanceKitty: increment(task.reward || 0),
-          miningSpeed: increment(task.miningBoost || 0)
+          balanceKitty: increment(staticTask.reward || 0),
+          miningSpeed: increment(staticTask.miningBoost || 0)
         });
       });
       return { success: true };
@@ -256,6 +273,7 @@ export const api = {
   },
 
   withdraw: async (amount: number, address: string) => {
+    clientWithdrawalsCache = null; // Invalidate cache on new withdrawal
     try {
       return await fetchApi('/withdraw', { method: 'POST', body: JSON.stringify({ amount, address }) });
     } catch (err) {
@@ -283,8 +301,16 @@ export const api = {
   },
 
   getWithdrawals: async () => {
+    const now = Date.now();
+    if (clientWithdrawalsCache && clientWithdrawalsCache.expiresAt > now) {
+      return { withdrawals: clientWithdrawalsCache.withdrawals };
+    }
     try {
-      return await fetchApi('/withdrawals');
+      const res = await fetchApi('/withdrawals');
+      if (res && Array.isArray(res.withdrawals)) {
+        clientWithdrawalsCache = { withdrawals: res.withdrawals, expiresAt: now + 3 * 60 * 1000 };
+      }
+      return res;
     } catch (err) {
       console.warn('API getWithdrawals failed, falling back to query Firestore directly', err);
       const userId = getUserId();
@@ -294,12 +320,14 @@ export const api = {
         orderBy('timestamp', 'desc')
       );
       const snap = await getDocs(q);
-      const withdrawals = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const withdrawals = snap.docs.slice(0, 10).map(d => ({ id: d.id, ...d.data() }));
+      clientWithdrawalsCache = { withdrawals, expiresAt: now + 3 * 60 * 1000 };
       return { withdrawals };
     }
   },
 
   claimEarlyUser: async () => {
+    clientEarlyStatusCache = null;
     try {
       return await fetchApi('/early-user/claim', { method: 'POST' });
     } catch (err) {
@@ -329,8 +357,23 @@ export const api = {
   },
 
   getEarlyUserStatus: async () => {
+    const now = Date.now();
+    if (clientEarlyStatusCache && clientEarlyStatusCache.expiresAt > now) {
+      return {
+        count: clientEarlyStatusCache.count,
+        isClaimed: clientEarlyStatusCache.isClaimed
+      };
+    }
     try {
-      return await fetchApi('/early-user/status');
+      const res = await fetchApi('/early-user/status');
+      if (res && typeof res.count === 'number') {
+        clientEarlyStatusCache = {
+          count: res.count,
+          isClaimed: Boolean(res.isClaimed),
+          expiresAt: now + 5 * 60 * 1000
+        };
+      }
+      return res;
     } catch (err) {
       console.warn('API getEarlyUserStatus failed, using client fallback', err);
       const userId = getUserId();
@@ -340,6 +383,11 @@ export const api = {
       const earlySnap = await getDoc(doc(db, 'early_users', userId));
       const isClaimed = earlySnap.exists();
       
+      clientEarlyStatusCache = {
+        count,
+        isClaimed,
+        expiresAt: now + 5 * 60 * 1000
+      };
       return { count, isClaimed };
     }
   },
@@ -350,38 +398,27 @@ export const api = {
     } catch (err) {
       console.warn('API getReferrals failed, using client fallback', err);
       const userId = getUserId();
-      const q = query(collection(db, 'users'), where('referrerId', '==', userId));
+      const q = query(collection(db, 'referrals'), where('referrerId', '==', userId));
       const snap = await getDocs(q);
       const referrals = snap.docs
-        .map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            firstName: data.firstName || 'Telegram User',
-            lastName: data.lastName || '',
-            username: data.username || '',
-            miningSpeed: data.miningSpeed || 500,
-            joinedAt: data.referredAt || data.createdAt || Date.now()
-          };
-        })
-        .sort((a, b) => b.joinedAt - a.joinedAt);
-
-      const userRef = doc(db, 'users', userId);
-      const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
-        const currentCount = userSnap.data()?.referralCount || 0;
-        if (referrals.length > currentCount) {
-          await updateDoc(userRef, { referralCount: referrals.length });
-        }
-      }
+        .map((d) => ({
+          id: d.id,
+          ...d.data()
+        }))
+        .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
 
       return { referrals, count: referrals.length };
     }
   },
 
   getBotInfo: async () => {
+    if (clientBotInfoCache) return clientBotInfoCache;
     try {
-      return await fetchApi('/bot-info');
+      const info = await fetchApi('/bot-info');
+      if (info?.botUsername) {
+        clientBotInfoCache = info;
+      }
+      return info;
     } catch {
       return {
         botUsername:

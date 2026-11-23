@@ -235,6 +235,10 @@ const callBackendApi = async (path: string, options: RequestInit = {}) => {
   return response.json();
 };
 
+// Client-side memory caches for Referral Hub to avoid repeated Firestore reads
+const myReferralsClientCache = new Map<string, { data: ReferralRecord[]; expiresAt: number }>();
+let leaderboardClientCache: { data: LeaderboardEntry[]; expiresAt: number } | null = null;
+
 export const referralService = {
   /**
    * Executes the atomic referral attribution:
@@ -263,6 +267,9 @@ export const referralService = {
     if (!referrerId) {
       return { applied: false, reason: 'no_valid_referrer' };
     }
+
+    myReferralsClientCache.delete(referrerId);
+    leaderboardClientCache = null;
 
     try {
       return await callBackendApi('/referrals/process', {
@@ -461,12 +468,22 @@ export const referralService = {
 
   /**
    * Queries the "referrals" collection where('referrerId', '==', userId) ordered descending by timestamp
-   * plus falls back to checking referred users for backwards compatibility.
+   * Uses a 2-minute client memory cache to prevent redundant reads on tab navigation.
    */
-  getMyReferrals: async (userId: string): Promise<ReferralRecord[]> => {
+  getMyReferrals: async (userId: string, forceRefresh = false): Promise<ReferralRecord[]> => {
+    const now = Date.now();
+    const cached = myReferralsClientCache.get(userId);
+    if (!forceRefresh && cached && cached.expiresAt > now) {
+      return cached.data;
+    }
+
     try {
       const res = await callBackendApi('/referrals');
       if (res && Array.isArray(res.referrals)) {
+        myReferralsClientCache.set(userId, {
+          data: res.referrals,
+          expiresAt: now + 2 * 60 * 1000,
+        });
         return res.referrals;
       }
     } catch (err) {
@@ -474,75 +491,53 @@ export const referralService = {
     }
 
     try {
-      const q = query(
-        collection(db, 'referrals'),
-        where('referrerId', '==', userId),
-        orderBy('timestamp', 'desc')
-      );
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        return snap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<ReferralRecord, 'id'>),
-        }));
-      }
-    } catch {
-      // Fallback without composite index if needed
       const qFallback = query(
         collection(db, 'referrals'),
-        where('referrerId', '==', userId)
+        where('referrerId', '==', userId),
+        limit(25)
       );
       const snapFallback = await getDocs(qFallback);
-      const items = snapFallback.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<ReferralRecord, 'id'>),
-      }));
-      return items.sort((a, b) => b.timestamp - a.timestamp);
+      const items = snapFallback.docs
+        .map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<ReferralRecord, 'id'>),
+        }))
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+      myReferralsClientCache.set(userId, {
+        data: items,
+        expiresAt: now + 2 * 60 * 1000,
+      });
+      return items;
+    } catch {
+      return [];
     }
-
-    return [];
-  },
-
-  /**
-   * Real-time listener on the global "referrals" collection where('referrerId', '==', userId)
-   * so the inviter's screen updates instantaneously when a friend opens their referral link.
-   */
-  subscribeToMyReferrals: (
-    userId: string,
-    onUpdate: (referrals: ReferralRecord[]) => void
-  ): (() => void) => {
-    const q = query(
-      collection(db, 'referrals'),
-      where('referrerId', '==', userId)
-    );
-    return onSnapshot(
-      q,
-      (snap) => {
-        const list = snap.docs
-          .map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<ReferralRecord, 'id'>),
-          }))
-          .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-        onUpdate(list);
-      },
-      (err) => {
-        console.warn('Real-time referrals subscription error:', err);
-      }
-    );
   },
 
   /**
    * Weekly / Top Referrers Leaderboard:
    * Queries "users" ordered descending by referralsCount with a limit, marking isCurrentUser.
+   * Cached for 5 minutes on the client so switching tabs costs 0 reads!
    */
   getLeaderboard: async (
     currentUserId: string,
-    maxLimit = 15
+    maxLimit = 10
   ): Promise<LeaderboardEntry[]> => {
+    const now = Date.now();
+    if (leaderboardClientCache && leaderboardClientCache.expiresAt > now) {
+      return leaderboardClientCache.data.map((item) => ({
+        ...item,
+        isCurrentUser: String(item.id) === String(currentUserId),
+      }));
+    }
+
     try {
       const res = await callBackendApi(`/referrals/leaderboard?limit=${maxLimit}`);
       if (res && Array.isArray(res.leaderboard)) {
+        leaderboardClientCache = {
+          data: res.leaderboard,
+          expiresAt: now + 5 * 60 * 1000,
+        };
         return res.leaderboard;
       }
     } catch (err) {
@@ -556,7 +551,7 @@ export const referralService = {
         limit(maxLimit)
       );
       const snap = await getDocs(q);
-      return snap.docs.map((d, index) => {
+      const list = snap.docs.map((d, index) => {
         const data = d.data();
         const count = Math.max(data.referralsCount || 0, data.referralCount || 0);
         return {
@@ -571,6 +566,11 @@ export const referralService = {
           rank: index + 1,
         };
       });
+      leaderboardClientCache = {
+        data: list,
+        expiresAt: now + 5 * 60 * 1000,
+      };
+      return list;
     } catch {
       return [];
     }

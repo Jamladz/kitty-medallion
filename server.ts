@@ -123,24 +123,19 @@ const authenticateTelegram = async (req: express.Request, res: express.Response,
   }
 };
 
-// Seed tasks if empty
-async function seedTasks() {
-  const tasksRef = db.collection('tasks');
-  const snap = await tasksRef.limit(1).get();
-  if (snap.empty) {
-    const defaultTasks = [
-      { id: 'telegram_channel', title: 'Join our Telegram Channel', description: 'Stay updated with the latest news.', reward: 1000, miningBoost: 50, type: 'social', isActive: true },
-      { id: 'twitter_follow', title: 'Follow us on X (Twitter)', description: 'Follow our official X account.', reward: 500, miningBoost: 20, type: 'social', isActive: true },
-      { id: 'home_screen', title: 'Add Kitty Medallion to Home Screen', description: 'Add Kitty Medallion to your phone\'s home screen for faster access and receive a Kitty Medallion reward.', reward: 2000, miningBoost: 100, type: 'home_screen', isActive: true },
-      { id: 'watch_ad', title: 'Watch an Ad', description: 'Support the project by watching a short ad.', reward: 500, miningBoost: 10, type: 'monetag', isActive: true }
-    ];
-    for (const task of defaultTasks) {
-      await tasksRef.doc(task.id).set(task);
-    }
-  }
-}
-seedTasks().catch(console.error);
+// Static active tasks catalog (0 Firestore reads required to list active tasks!)
+const DEFAULT_TASKS = [
+  { id: 'telegram_channel', title: 'Join our Telegram Channel', description: 'Stay updated with the latest news.', reward: 1000, miningBoost: 50, type: 'social', isActive: true },
+  { id: 'twitter_follow', title: 'Follow us on X (Twitter)', description: 'Follow our official X account.', reward: 500, miningBoost: 20, type: 'social', isActive: true },
+  { id: 'home_screen', title: 'Add Kitty Medallion to Home Screen', description: 'Add Kitty Medallion to your phone\'s home screen for faster access and receive a Kitty Medallion reward.', reward: 2000, miningBoost: 100, type: 'home_screen', isActive: true },
+  { id: 'watch_ad', title: 'Watch an Ad', description: 'Support the project by watching a short ad.', reward: 500, miningBoost: 10, type: 'monetag', isActive: true }
+];
 
+// In-memory server caches to drastically reduce Firestore read quota usage
+let leaderboardCache: { data: any[]; expiresAt: number } | null = null;
+const referralsCache = new Map<string, { data: any[]; expiresAt: number }>();
+const tasksCompletionCache = new Map<string, { completedIds: Set<string>; expiresAt: number }>();
+let earlyStateCache: { count: number; expiresAt: number } | null = null;
 
 const extractReferrerId = (rawParam?: string | null): string | null => {
   if (!rawParam) return null;
@@ -180,7 +175,9 @@ app.get('/api/bot-info', async (_req, res) => {
   res.json({ botUsername, appShortName });
 });
 
-// Telegram Bot Webhook receiver so `/start ref_123456` links record pending referral automatically
+// In-memory map for webhook `/start ref_ID` so we don't even burn a Firestore read on every login!
+const pendingWebhookReferrals = new Map<string, string>();
+
 app.post('/api/telegram-webhook', async (req, res) => {
   try {
     const message = req.body?.message;
@@ -194,11 +191,7 @@ app.post('/api/telegram-webhook', async (req, res) => {
       const newUserId = String(fromUser.id);
 
       if (inviterId && inviterId !== newUserId) {
-        await db.collection('pending_referrals').doc(newUserId).set({
-          userId: newUserId,
-          referrerId: inviterId,
-          createdAt: Date.now()
-        });
+        pendingWebhookReferrals.set(newUserId, inviterId);
       }
     }
     res.json({ ok: true });
@@ -233,18 +226,27 @@ async function executeAtomicReferralTransaction(params: {
   const userRef = db.collection('users').doc(userId);
   let isNewUser = false;
   let referralApplied = false;
+  let finalUserData: any = null;
 
   await db.runTransaction(async (t) => {
     const userDoc = await t.get(userRef);
+    const existingData = userDoc.exists ? userDoc.data() : null;
+
+    const alreadyReferred = Boolean(
+      existingData?.referredBy || existingData?.referrerId
+    );
 
     const validReferrer =
-      candidateRef && candidateRef !== userId ? candidateRef : null;
+      !alreadyReferred && candidateRef && candidateRef !== userId
+        ? candidateRef
+        : null;
 
     let referrerDoc: any = null;
     const refUserRef = validReferrer
       ? db.collection('users').doc(validReferrer)
       : null;
 
+    // Only read referrer doc if we actually have a valid new referral to apply (saves reads!)
     if (refUserRef) {
       referrerDoc = await t.get(refUserRef);
     }
@@ -253,11 +255,6 @@ async function executeAtomicReferralTransaction(params: {
     const referredFullName =
       `${firstName} ${lastName}`.trim() || username || `Miner #${userId.slice(-4)}`;
 
-    // Check if already referred or circular referral
-    const existingData = userDoc.exists ? userDoc.data() : null;
-    const alreadyReferred = Boolean(
-      existingData?.referredBy || existingData?.referrerId
-    );
     const isCircular =
       referrerDoc?.exists &&
       (referrerDoc.data()?.referredBy === userId ||
@@ -267,10 +264,10 @@ async function executeAtomicReferralTransaction(params: {
       validReferrer && refUserRef && !alreadyReferred && !isCircular
     );
 
-    // Step A: Update or Create the referred user document
+    // Step A: Create or Update the referred user document (skip unnecessary writes if nothing changed)
     if (!userDoc.exists) {
       isNewUser = true;
-      t.set(userRef, {
+      finalUserData = {
         id: userId,
         firstName: firstName || '',
         lastName: lastName || '',
@@ -288,30 +285,49 @@ async function executeAtomicReferralTransaction(params: {
         vipExpiresAt: 0,
         lastMiningClaim: now,
         createdAt: now
-      });
-    } else {
-      const updates: Record<string, any> = {
-        firstName: firstName || existingData.firstName || '',
-        lastName: lastName || existingData.lastName || '',
-        username: username || existingData.username || ''
       };
+      t.set(userRef, finalUserData);
+    } else {
+      finalUserData = { ...existingData };
+      const updates: Record<string, any> = {};
+
+      if (firstName && firstName !== existingData.firstName) {
+        updates.firstName = firstName;
+        finalUserData.firstName = firstName;
+      }
+      if (lastName && lastName !== existingData.lastName) {
+        updates.lastName = lastName;
+        finalUserData.lastName = lastName;
+      }
+      if (username && username !== existingData.username) {
+        updates.username = username;
+        finalUserData.username = username;
+      }
 
       if (shouldApplyReferral) {
         updates.referredBy = validReferrer;
         updates.referrerId = validReferrer;
         updates.referredAt = now;
         updates.balanceKitty = FieldValue.increment(REFERRAL_REWARDS.WELCOME_BONUS);
+        finalUserData.referredBy = validReferrer;
+        finalUserData.referrerId = validReferrer;
+        finalUserData.referredAt = now;
+        finalUserData.balanceKitty =
+          (existingData.balanceKitty || 0) + REFERRAL_REWARDS.WELCOME_BONUS;
       }
 
-      t.update(userRef, updates);
+      if (Object.keys(updates).length > 0) {
+        t.update(userRef, updates);
+      }
     }
 
     // Step B & C: Update/Create the referrer document AND create record in "referrals" collection
     if (shouldApplyReferral && validReferrer && refUserRef) {
       referralApplied = true;
+      referralsCache.delete(validReferrer);
+      leaderboardCache = null;
 
       if (!referrerDoc || !referrerDoc.exists) {
-        // Create referrer document if it didn't exist yet
         t.set(refUserRef, {
           id: validReferrer,
           firstName: `Miner #${validReferrer.slice(-4)}`,
@@ -357,7 +373,7 @@ async function executeAtomicReferralTransaction(params: {
     }
   });
 
-  return { isNewUser, referralApplied };
+  return { isNewUser, referralApplied, user: finalUserData };
 }
 
 app.post('/api/auth', authenticateTelegram, async (req, res) => {
@@ -378,17 +394,12 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
   let candidateRef =
     extractReferrerId(bodyReferrerId) ||
     extractReferrerId(bodyStartParam) ||
-    extractReferrerId(initDataStartParam);
+    extractReferrerId(initDataStartParam) ||
+    pendingWebhookReferrals.get(userId) ||
+    null;
 
   try {
-    if (!candidateRef) {
-      const pendingDoc = await db.collection('pending_referrals').doc(userId).get();
-      if (pendingDoc.exists) {
-        candidateRef = extractReferrerId(pendingDoc.data()?.referrerId);
-      }
-    }
-
-    const { isNewUser, referralApplied } = await executeAtomicReferralTransaction({
+    const { isNewUser, referralApplied, user } = await executeAtomicReferralTransaction({
       userId,
       firstName: tUser.first_name || '',
       lastName: tUser.last_name || '',
@@ -396,11 +407,14 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
       candidateRef
     });
 
-    const updatedDoc = await db.collection('users').doc(userId).get();
+    if (referralApplied) {
+      pendingWebhookReferrals.delete(userId);
+    }
+
     res.json({
       token: 'mock_token',
       userId,
-      user: updatedDoc.data(),
+      user,
       isNewUser,
       referralApplied
     });
@@ -489,73 +503,39 @@ app.post('/api/referrals/claim-milestone', authenticateTelegram, async (req, res
 
 app.get('/api/referrals', authenticateTelegram, async (req, res) => {
   const userId = String((req as any).userId);
+  const now = Date.now();
+
+  // Check 2-minute server cache first
+  const cached = referralsCache.get(userId);
+  if (cached && cached.expiresAt > now) {
+    return res.json({ referrals: cached.data, count: cached.data.length });
+  }
+
   try {
-    // 1. Query dedicated "referrals" collection where('referrerId', '==', userId)
+    // Query ONLY the dedicated "referrals" collection (no extra users collection scan!)
     const refSnap = await db
       .collection('referrals')
       .where('referrerId', '==', userId)
       .get();
 
-    let referrals = refSnap.docs.map((d) => {
-      const data = d.data();
-      return {
-        id: d.id,
-        referrerId: data.referrerId,
-        referredId: data.referredId,
-        referredName: data.referredName || 'Telegram Friend',
-        referredUsername: data.referredUsername || '',
-        rewardAmount: data.rewardAmount || REFERRAL_REWARDS.REFERRER_REWARD,
-        welcomeBonus: data.welcomeBonus || REFERRAL_REWARDS.WELCOME_BONUS,
-        speedBoost: data.speedBoost || REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
-        timestamp: data.timestamp || Date.now()
-      };
-    });
+    const referrals = refSnap.docs
+      .map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          referrerId: data.referrerId,
+          referredId: data.referredId,
+          referredName: data.referredName || 'Telegram Friend',
+          referredUsername: data.referredUsername || '',
+          rewardAmount: data.rewardAmount || REFERRAL_REWARDS.REFERRER_REWARD,
+          welcomeBonus: data.welcomeBonus || REFERRAL_REWARDS.WELCOME_BONUS,
+          speedBoost: data.speedBoost || REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
+          timestamp: data.timestamp || Date.now()
+        };
+      })
+      .sort((a, b) => b.timestamp - a.timestamp);
 
-    // 2. Backwards-compatible fallback: also include any users with referrerId == userId not yet in "referrals"
-    const usersSnap = await db
-      .collection('users')
-      .where('referrerId', '==', userId)
-      .get();
-
-    const recordedIds = new Set(referrals.map((r) => String(r.referredId)));
-    for (const uDoc of usersSnap.docs) {
-      if (!recordedIds.has(String(uDoc.id))) {
-        const uData = uDoc.data();
-        referrals.push({
-          id: `legacy_${uDoc.id}`,
-          referrerId: userId,
-          referredId: uDoc.id,
-          referredName:
-            `${uData.firstName || ''} ${uData.lastName || ''}`.trim() ||
-            uData.username ||
-            'Telegram Friend',
-          referredUsername: uData.username || '',
-          rewardAmount: REFERRAL_REWARDS.REFERRER_REWARD,
-          welcomeBonus: REFERRAL_REWARDS.WELCOME_BONUS,
-          speedBoost: REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
-          timestamp: uData.referredAt || uData.createdAt || Date.now()
-        });
-      }
-    }
-
-    referrals.sort((a, b) => b.timestamp - a.timestamp);
-
-    // Reconcile user's referralsCount & referralCount if actual referral records exceed stored counter
-    const userRef = db.collection('users').doc(userId);
-    const userDoc = await userRef.get();
-    if (userDoc.exists) {
-      const uData = userDoc.data()!;
-      const storedCount = Math.max(uData.referralsCount || 0, uData.referralCount || 0);
-      if (referrals.length > storedCount) {
-        const diff = referrals.length - storedCount;
-        await userRef.update({
-          referralCount: referrals.length,
-          referralsCount: referrals.length,
-          earnedReferralCoins: FieldValue.increment(diff * REFERRAL_REWARDS.REFERRER_REWARD)
-        });
-      }
-    }
-
+    referralsCache.set(userId, { data: referrals, expiresAt: now + 2 * 60 * 1000 });
     res.json({ referrals, count: referrals.length });
   } catch (error) {
     console.error('Get referrals error:', error);
@@ -565,30 +545,46 @@ app.get('/api/referrals', authenticateTelegram, async (req, res) => {
 
 app.get('/api/referrals/leaderboard', authenticateTelegram, async (req, res) => {
   const userId = String((req as any).userId);
-  const maxLimit = Math.min(50, Math.max(5, Number(req.query.limit) || 15));
+  const maxLimit = Math.min(20, Math.max(5, Number(req.query.limit) || 10));
+  const now = Date.now();
 
   try {
-    const snap = await db
-      .collection('users')
-      .orderBy('referralsCount', 'desc')
-      .limit(maxLimit)
-      .get();
+    let rawTopUsers: any[] = [];
+    // Use 5-minute server-side cache so leaderboard doesn't burn 15 reads on every user tab click
+    if (leaderboardCache && leaderboardCache.expiresAt > now) {
+      rawTopUsers = leaderboardCache.data;
+    } else {
+      const snap = await db
+        .collection('users')
+        .orderBy('referralsCount', 'desc')
+        .limit(maxLimit)
+        .get();
 
-    const leaderboard = snap.docs.map((d, idx) => {
-      const data = d.data();
-      const count = Math.max(data.referralsCount || 0, data.referralCount || 0);
-      return {
-        id: d.id,
-        firstName: data.firstName || 'Miner',
-        lastName: data.lastName || '',
-        username: data.username || '',
-        referralsCount: count,
-        earnedReferralCoins:
-          data.earnedReferralCoins || count * REFERRAL_REWARDS.REFERRER_REWARD,
-        isCurrentUser: String(d.id) === userId,
-        rank: idx + 1
+      rawTopUsers = snap.docs.map((d, idx) => {
+        const data = d.data();
+        const count = Math.max(data.referralsCount || 0, data.referralCount || 0);
+        return {
+          id: d.id,
+          firstName: data.firstName || 'Miner',
+          lastName: data.lastName || '',
+          username: data.username || '',
+          referralsCount: count,
+          earnedReferralCoins:
+            data.earnedReferralCoins || count * REFERRAL_REWARDS.REFERRER_REWARD,
+          rank: idx + 1
+        };
+      });
+
+      leaderboardCache = {
+        data: rawTopUsers,
+        expiresAt: now + 5 * 60 * 1000
       };
-    });
+    }
+
+    const leaderboard = rawTopUsers.map((entry) => ({
+      ...entry,
+      isCurrentUser: String(entry.id) === userId
+    }));
 
     res.json({ leaderboard });
   } catch (error) {
@@ -601,7 +597,8 @@ const MINING_CYCLE_MS = 24 * 60 * 60 * 1000;
 
 async function claimMining(userId: string) {
   const userRef = db.collection('users').doc(userId);
-  return await db.runTransaction(async (transaction) => {
+  let updatedData: any = null;
+  const earned = await db.runTransaction(async (transaction) => {
     const userDoc = await transaction.get(userRef);
     if (!userDoc.exists) throw new Error('User not found');
     const data = userDoc.data()!;
@@ -614,21 +611,26 @@ async function claimMining(userId: string) {
       throw new Error(`Mining cycle in progress. Ready in ~${remainingHours}h.`);
     }
 
-    const earned = data.miningSpeed || 500;
+    const reward = data.miningSpeed || 500;
     transaction.update(userRef, {
-      balanceKitty: FieldValue.increment(earned),
+      balanceKitty: FieldValue.increment(reward),
       lastMiningClaim: now
     });
-    return earned;
+    updatedData = {
+      ...data,
+      balanceKitty: (data.balanceKitty || 0) + reward,
+      lastMiningClaim: now
+    };
+    return reward;
   });
+  return { earned, user: updatedData };
 }
 
 app.post('/api/claim-mining', authenticateTelegram, async (req, res) => {
   const userId = (req as any).userId;
   try {
-    const earned = await claimMining(userId);
-    const userDoc = await db.collection('users').doc(userId).get();
-    res.json({ success: true, earned, user: userDoc.data() });
+    const { earned, user } = await claimMining(userId);
+    res.json({ success: true, earned, user });
   } catch (error: any) {
     console.error('Claim mining error:', error);
     res.status(400).json({ error: error.message || 'Mining cycle not finished yet' });
@@ -636,19 +638,30 @@ app.post('/api/claim-mining', authenticateTelegram, async (req, res) => {
 });
 
 app.get('/api/tasks', authenticateTelegram, async (req, res) => {
-  const userId = (req as any).userId;
+  const userId = String((req as any).userId);
+  const now = Date.now();
   try {
-    const tasksSnapshot = await db.collection('tasks').where('isActive', '==', true).get();
-    const completionsSnapshot = await db.collection('users').doc(userId).collection('task_completions').get();
-    const completedTaskIds = new Set(completionsSnapshot.docs.map(d => d.id));
-    
-    const tasks = tasksSnapshot.docs.map(doc => {
-      const data = doc.data();
-      return {
-        ...data,
-        isCompleted: completedTaskIds.has(doc.id)
-      };
-    });
+    let completedTaskIds: Set<string>;
+    const cached = tasksCompletionCache.get(userId);
+    if (cached && cached.expiresAt > now) {
+      completedTaskIds = cached.completedIds;
+    } else {
+      const completionsSnapshot = await db
+        .collection('users')
+        .doc(userId)
+        .collection('task_completions')
+        .get();
+      completedTaskIds = new Set(completionsSnapshot.docs.map((d) => d.id));
+      tasksCompletionCache.set(userId, {
+        completedIds: completedTaskIds,
+        expiresAt: now + 5 * 60 * 1000
+      });
+    }
+
+    const tasks = DEFAULT_TASKS.map((task) => ({
+      ...task,
+      isCompleted: completedTaskIds.has(task.id)
+    }));
     res.json({ tasks });
   } catch (error) {
     res.status(500).json({ error: 'Internal server error' });
@@ -656,31 +669,45 @@ app.get('/api/tasks', authenticateTelegram, async (req, res) => {
 });
 
 app.post('/api/tasks/claim', authenticateTelegram, async (req, res) => {
-  const userId = (req as any).userId;
+  const userId = String((req as any).userId);
   const { taskId } = req.body;
   if (!taskId) return res.status(400).json({ error: 'taskId required' });
-  
+
+  const staticTask = DEFAULT_TASKS.find((t) => t.id === taskId && t.isActive);
+  if (!staticTask) {
+    return res.status(400).json({ error: 'Task not found or inactive' });
+  }
+
   try {
-    const result = await db.runTransaction(async (t) => {
-      const taskRef = db.collection('tasks').doc(taskId);
-      const completionRef = db.collection('users').doc(userId).collection('task_completions').doc(taskId);
+    await db.runTransaction(async (t) => {
+      const completionRef = db
+        .collection('users')
+        .doc(userId)
+        .collection('task_completions')
+        .doc(taskId);
       const userRef = db.collection('users').doc(userId);
-      
-      const [taskDoc, compDoc, userDoc] = await Promise.all([t.get(taskRef), t.get(completionRef), t.get(userRef)]);
-      
-      if (!taskDoc.exists || !taskDoc.data()?.isActive) throw new Error('Task not found or inactive');
+
+      const [compDoc, userDoc] = await Promise.all([
+        t.get(completionRef),
+        t.get(userRef)
+      ]);
+
       if (compDoc.exists) throw new Error('Task already completed');
       if (!userDoc.exists) throw new Error('User not found');
-      
-      const task = taskDoc.data()!;
+
       t.set(completionRef, { completedAt: Date.now() });
       t.update(userRef, {
-        balanceKitty: FieldValue.increment(task.reward || 0),
-        miningSpeed: FieldValue.increment(task.miningBoost || 0)
+        balanceKitty: FieldValue.increment(staticTask.reward || 0),
+        miningSpeed: FieldValue.increment(staticTask.miningBoost || 0)
       });
-      return task;
     });
-    res.json({ success: true, reward: result.reward, miningBoost: result.miningBoost });
+
+    tasksCompletionCache.delete(userId);
+    res.json({
+      success: true,
+      reward: staticTask.reward,
+      miningBoost: staticTask.miningBoost
+    });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -743,18 +770,36 @@ app.post('/api/withdraw', authenticateTelegram, async (req, res) => {
   }
 });
 
+const withdrawalsCache = new Map<string, { data: any[]; expiresAt: number }>();
+const earlyUserClaimedCache = new Map<string, { isClaimed: boolean; expiresAt: number }>();
+
 app.get('/api/withdrawals', authenticateTelegram, async (req, res) => {
-  const userId = (req as any).userId;
+  const userId = String((req as any).userId);
+  const now = Date.now();
+  const cached = withdrawalsCache.get(userId);
+  if (cached && cached.expiresAt > now) {
+    return res.json({ withdrawals: cached.data });
+  }
   try {
-    const snap = await db.collection('withdrawals').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
-    res.json({ withdrawals: snap.docs.map(d => ({ id: d.id, ...d.data() })) });
+    const snap = await db
+      .collection('withdrawals')
+      .where('userId', '==', userId)
+      .orderBy('timestamp', 'desc')
+      .limit(10)
+      .get();
+    const withdrawals = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    withdrawalsCache.set(userId, {
+      data: withdrawals,
+      expiresAt: now + 3 * 60 * 1000
+    });
+    res.json({ withdrawals });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 app.post('/api/early-user/claim', authenticateTelegram, async (req, res) => {
-  const userId = (req as any).userId;
+  const userId = String((req as any).userId);
   try {
     const result = await db.runTransaction(async (t) => {
       const stateRef = db.collection('system').doc('state');
@@ -776,6 +821,12 @@ app.post('/api/early-user/claim', authenticateTelegram, async (req, res) => {
       });
       return count + 1;
     });
+
+    earlyStateCache = { count: result, expiresAt: Date.now() + 5 * 60 * 1000 };
+    earlyUserClaimedCache.set(userId, {
+      isClaimed: true,
+      expiresAt: Date.now() + 30 * 60 * 1000
+    });
     res.json({ success: true, count: result });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
@@ -783,14 +834,31 @@ app.post('/api/early-user/claim', authenticateTelegram, async (req, res) => {
 });
 
 app.get('/api/early-user/status', authenticateTelegram, async (req, res) => {
-  const userId = (req as any).userId;
+  const userId = String((req as any).userId);
+  const now = Date.now();
   try {
-    const stateDoc = await db.collection('system').doc('state').get();
-    const count = stateDoc.exists ? stateDoc.data()!.earlyUsersCount || 0 : 0;
-    
-    const earlyDoc = await db.collection('early_users').doc(userId).get();
-    const isClaimed = earlyDoc.exists;
-    
+    let count = 0;
+    if (earlyStateCache && earlyStateCache.expiresAt > now) {
+      count = earlyStateCache.count;
+    } else {
+      const stateDoc = await db.collection('system').doc('state').get();
+      count = stateDoc.exists ? stateDoc.data()!.earlyUsersCount || 0 : 0;
+      earlyStateCache = { count, expiresAt: now + 5 * 60 * 1000 };
+    }
+
+    let isClaimed = false;
+    const cachedClaim = earlyUserClaimedCache.get(userId);
+    if (cachedClaim && cachedClaim.expiresAt > now) {
+      isClaimed = cachedClaim.isClaimed;
+    } else {
+      const earlyDoc = await db.collection('early_users').doc(userId).get();
+      isClaimed = earlyDoc.exists;
+      earlyUserClaimedCache.set(userId, {
+        isClaimed,
+        expiresAt: now + 10 * 60 * 1000
+      });
+    }
+
     res.json({ count, isClaimed });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
