@@ -5,7 +5,6 @@ import { api } from '../lib/api';
 import {
   getEffectiveTelegramUser,
   detectReferrerOnLaunch,
-  clearPendingReferrer,
 } from '../lib/telegram';
 import { REFERRAL_CONFIG } from '../lib/rewardsEngine';
 import { hasValidReferrer, referralService } from '../lib/referrals';
@@ -39,7 +38,10 @@ const getCachedUser = (userId: string) => {
 const saveCachedUser = (userId: string, data: any) => {
   try {
     if (data) {
-      window.localStorage.setItem(`kitty_user_cache_${userId}`, JSON.stringify(data));
+      window.localStorage.setItem(
+        `kitty_user_cache_${userId}`,
+        JSON.stringify(data)
+      );
     }
   } catch {
     // ignore storage errors
@@ -74,6 +76,64 @@ const buildDefaultUser = (
   };
 };
 
+// Safely merge two user snapshots so higher referral counts or balances are never lost
+const mergeUserSnapshots = (primary: any, secondary: any, userId: string) => {
+  if (!primary && !secondary) return null;
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+
+  const primaryRefs = Math.max(
+    Number(primary.referralsCount) || 0,
+    Number(primary.referralCount) || 0
+  );
+  const secondaryRefs = Math.max(
+    Number(secondary.referralsCount) || 0,
+    Number(secondary.referralCount) || 0
+  );
+  const bestRefs = Math.max(primaryRefs, secondaryRefs);
+
+  const validRef =
+    (hasValidReferrer(primary, userId)
+      ? primary.referredBy || primary.referrerId
+      : null) ||
+    (hasValidReferrer(secondary, userId)
+      ? secondary.referredBy || secondary.referrerId
+      : null) ||
+    null;
+
+  return {
+    ...secondary,
+    ...primary,
+    id: userId,
+    referralsCount: bestRefs,
+    referralCount: bestRefs,
+    earnedReferralCoins: Math.max(
+      Number(primary.earnedReferralCoins) || 0,
+      Number(secondary.earnedReferralCoins) || 0,
+      bestRefs * REFERRAL_CONFIG.REFERRER_REWARD
+    ),
+    balanceKitty: Math.max(
+      Number(primary.balanceKitty) || 0,
+      Number(secondary.balanceKitty) || 0
+    ),
+    balanceUsdt: Math.max(
+      Number(primary.balanceUsdt) || 0,
+      Number(secondary.balanceUsdt) || 0
+    ),
+    miningSpeed: Math.max(
+      Number(primary.miningSpeed) || REFERRAL_CONFIG.DEFAULT_BASE_SPEED,
+      Number(secondary.miningSpeed) || REFERRAL_CONFIG.DEFAULT_BASE_SPEED,
+      REFERRAL_CONFIG.DEFAULT_BASE_SPEED +
+        bestRefs * REFERRAL_CONFIG.REFERRER_SPEED_BOOST
+    ),
+    referredBy: validRef,
+    referrerId: validRef,
+    welcomeUsdtGranted: Boolean(
+      primary.welcomeUsdtGranted || secondary.welcomeUsdtGranted
+    ),
+  };
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
@@ -85,8 +145,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const handleUserUpdatedEvent = (event: Event) => {
       const customEvent = event as CustomEvent;
       if (customEvent.detail && customEvent.detail.id) {
-        setUser(customEvent.detail);
-        saveCachedUser(String(customEvent.detail.id), customEvent.detail);
+        const incoming = customEvent.detail;
+        const uid = String(incoming.id);
+        setUser((prev: any) => {
+          const merged = mergeUserSnapshots(incoming, prev, uid);
+          saveCachedUser(uid, merged);
+          return merged;
+        });
       }
     };
 
@@ -108,7 +173,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const checkAndProcessReferralIfNeeded = async () => {
       const currentCached = getCachedUser(userId);
       const detectedRef = detectReferrerOnLaunch(userId);
-      if (detectedRef && !hasValidReferrer(currentCached, userId)) {
+      if (detectedRef || !hasValidReferrer(currentCached, userId)) {
         try {
           const refRes = await referralService.processReferral({
             currentUserId: userId,
@@ -118,8 +183,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             rawReferrerParam: detectedRef,
           });
           if (refRes?.user) {
-            setUser(refRes.user);
-            saveCachedUser(userId, refRes.user);
+            setUser((prev: any) => {
+              const merged = mergeUserSnapshots(refRes.user, prev, userId);
+              saveCachedUser(userId, merged);
+              return merged;
+            });
           }
         } catch (err) {
           console.warn('Referral attribution check warning:', err);
@@ -157,20 +225,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         //    b) Fallback: query & hash parameters (startapp / ref / start)
         const referrerId = detectReferrerOnLaunch(userId);
 
-        // 2. Authenticate with server (passes cached user so existing unreferred users preserve progress and get referred!)
-        let authSuccess = false;
-        let serverReferralApplied = false;
-        try {
-          const authData = await api.auth(referrerId || undefined, cached);
-          if (authData && !authData.fallback && authData.user) {
-            authSuccess = true;
-            serverReferralApplied = Boolean(
-              authData.referralApplied ||
-                hasValidReferrer(authData.user, userId)
-            );
-            if (serverReferralApplied) {
-              clearPendingReferrer();
+        // 2. Execute atomic Firestore referral attribution FIRST (if referrerId detected or pending_referrals exists)
+        //    This ensures cross-device Firestore records for BOTH the invited user and the inviter are updated immediately!
+        let currentBestUser = cached;
+        if (referrerId || !hasValidReferrer(cached, userId)) {
+          try {
+            const refRes = await referralService.processReferral({
+              currentUserId: userId,
+              currentUserFirstName: firstName,
+              currentUserLastName: lastName,
+              currentUserUsername: username,
+              rawReferrerParam: referrerId,
+            });
+            if (refRes?.user) {
+              currentBestUser = mergeUserSnapshots(
+                refRes.user,
+                currentBestUser,
+                userId
+              );
+              setUser(currentBestUser);
+              saveCachedUser(userId, currentBestUser);
+              setLoading(false);
             }
+          } catch (refErr) {
+            console.warn('Initial referral processing warning:', refErr);
+          }
+        }
+
+        // 3. Read or create user directly in Firestore so we have the true cross-device state
+        try {
+          const userDocRef = doc(db, 'users', userId);
+          const userDocSnap = await getDoc(userDocRef);
+          if (userDocSnap.exists()) {
+            const docData = userDocSnap.data();
+            currentBestUser = mergeUserSnapshots(
+              docData,
+              currentBestUser,
+              userId
+            );
+            setUser(currentBestUser);
+            saveCachedUser(userId, currentBestUser);
+            setLoading(false);
+          } else if (!currentBestUser) {
+            const initialUser = buildDefaultUser(
+              userId,
+              firstName,
+              lastName,
+              username
+            );
+            await setDoc(userDocRef, initialUser);
+            currentBestUser = initialUser;
+            setUser(initialUser);
+            saveCachedUser(userId, initialUser);
+            setLoading(false);
+          }
+        } catch (fsErr) {
+          console.warn('Firestore direct user read warning:', fsErr);
+        }
+
+        // 4. Sync with backend API (passing currentBestUser so backend never overwrites Firestore with stale data)
+        try {
+          const authData = await api.auth(
+            referrerId || undefined,
+            currentBestUser
+          );
+          if (authData && !authData.fallback && authData.user) {
             if (authData.referralApplied || authData.welcomeGiftGranted) {
               try {
                 window.dispatchEvent(
@@ -184,64 +303,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
                 );
               } catch {}
             }
-            setUser(authData.user);
-            saveCachedUser(userId, authData.user);
+            currentBestUser = mergeUserSnapshots(
+              currentBestUser,
+              authData.user,
+              userId
+            );
+            setUser(currentBestUser);
+            saveCachedUser(userId, currentBestUser);
             setLoading(false);
           }
         } catch (apiErr) {
-          console.warn(
-            'API Authentication warning, checking client-side fallback:',
-            apiErr
-          );
+          console.warn('API Authentication sync warning:', apiErr);
         }
 
-        // 3. Guarantee referral attribution: even if user entered previously without a link,
-        //    if they are not yet validly referred and opened a referral link now, attribute it!
-        if (referrerId && !serverReferralApplied) {
-          try {
-            const refRes = await referralService.processReferral({
-              currentUserId: userId,
-              currentUserFirstName: firstName,
-              currentUserLastName: lastName,
-              currentUserUsername: username,
-              rawReferrerParam: referrerId,
-            });
-            if (refRes?.user) {
-              setUser(refRes.user);
-              saveCachedUser(userId, refRes.user);
-            }
-          } catch (refErr) {
-            console.warn('Client referral processing warning:', refErr);
-          }
-        } else if (!authSuccess && !cached) {
-          try {
-            const userDocRef = doc(db, 'users', userId);
-            const userDocSnap = await getDoc(userDocRef);
-            if (userDocSnap.exists()) {
-              const docData = userDocSnap.data();
-              setUser(docData);
-              saveCachedUser(userId, docData);
-            } else {
-              const initialUser = buildDefaultUser(
-                userId,
-                firstName,
-                lastName,
-                username
-              );
-              await setDoc(userDocRef, initialUser);
-              setUser(initialUser);
-              saveCachedUser(userId, initialUser);
-            }
-          } catch (fsErr) {
-            console.warn('Firestore direct read skipped (quota/offline):', fsErr);
-            const fallbackUser =
-              cached || buildDefaultUser(userId, firstName, lastName, username);
-            setUser(fallbackUser);
-            saveCachedUser(userId, fallbackUser);
-          }
-        }
+        // 5. Reconcile user's own referrals in Firestore (ensures if this user is an inviter, any new referrals are credited immediately!)
+        referralService.getMyReferrals(userId, true).catch(() => {});
 
-        // 4. Attach single document listener with graceful quota-error handler
+        // 6. Attach real-time Firestore document listener so inviter sees new referrals live
         try {
           unsubscribe = onSnapshot(
             doc(db, 'users', userId),
@@ -249,27 +327,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
               if (docSnap.exists()) {
                 const liveData = docSnap.data();
                 setUser((prev: any) => {
-                  // Never let a stale Firestore snapshot overwrite a higher referral count from serverLedger
-                  const prevRefs = Math.max(
-                    Number(prev?.referralsCount) || 0,
-                    Number(prev?.referralCount) || 0
-                  );
-                  const snapRefs = Math.max(
-                    Number(liveData?.referralsCount) || 0,
-                    Number(liveData?.referralCount) || 0
-                  );
-                  if (prev && prevRefs > snapRefs) {
-                    return prev;
-                  }
-                  saveCachedUser(userId, liveData);
-                  return liveData;
+                  const merged = mergeUserSnapshots(liveData, prev, userId);
+                  saveCachedUser(userId, merged);
+                  return merged;
                 });
               }
               setLoading(false);
             },
             (snapErr) => {
               console.warn(
-                'Firestore snapshot listener paused (using server ledger / API user state):',
+                'Firestore snapshot listener paused:',
                 snapErr.message
               );
               setUser((prev: any) =>
@@ -301,12 +368,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     initAuth();
 
-    // 5. Re-check referral parameters and sync server ledger when app resumes or URL changes
+    // 7. Re-check referral parameters and reconcile Firestore referrals when app resumes or URL changes
     const handleAppResumeOrUrlChange = () => {
       if (document.visibilityState === 'hidden') return;
       checkAndProcessReferralIfNeeded();
-      // Sync user state with server ledger (0 Firestore reads!) so inviter sees new referrals immediately
-      api.getReferrals().catch(() => {});
+      referralService.getMyReferrals(userId, true).catch(() => {});
     };
 
     window.addEventListener('focus', handleAppResumeOrUrlChange);
@@ -319,7 +385,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       window.removeEventListener('focus', handleAppResumeOrUrlChange);
       window.removeEventListener('hashchange', handleAppResumeOrUrlChange);
       window.removeEventListener('popstate', handleAppResumeOrUrlChange);
-      document.removeEventListener('visibilitychange', handleAppResumeOrUrlChange);
+      document.removeEventListener(
+        'visibilitychange',
+        handleAppResumeOrUrlChange
+      );
     };
   }, []);
 
@@ -328,12 +397,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       const res = await api.claimMining();
       if (res && res.success) {
         if (res.user) {
-          setUser(res.user);
-          saveCachedUser(String(res.user.id), res.user);
+          setUser((prev: any) => {
+            const merged = mergeUserSnapshots(
+              res.user,
+              prev,
+              String(res.user.id)
+            );
+            saveCachedUser(String(res.user.id), merged);
+            return merged;
+          });
         } else if (user) {
           const updated = {
             ...user,
-            balanceKitty: (user.balanceKitty || 0) + (res.claimed || res.earned || 0),
+            balanceKitty:
+              (user.balanceKitty || 0) + (res.claimed || res.earned || 0),
             lastMiningClaim: Date.now(),
           };
           setUser(updated);
@@ -351,4 +428,3 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     </AuthContext.Provider>
   );
 };
-

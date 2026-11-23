@@ -9,7 +9,8 @@ const INITIAL_LAUNCH_HASH =
   typeof window !== 'undefined' ? window.location.hash : '';
 
 /**
- * Cleans the "ref_" prefix and validates that the referrerId is a valid numeric Telegram ID
+ * Cleans the "ref_" prefix (including URL-encoded or Base64-encoded start_param values)
+ * and validates that the referrerId is a valid numeric Telegram ID
  * and not equal to currentUserId (prevents self-referral).
  */
 export function sanitizeReferrerId(
@@ -17,19 +18,53 @@ export function sanitizeReferrerId(
   currentUserId?: string
 ): string | null {
   if (!rawParam) return null;
-  const cleaned = String(rawParam)
-    .trim()
-    .replace(/^(ref_|r_|ref-|invite_|startapp=)/i, '')
-    .trim();
 
-  let candidate: string | null = null;
-  if (/^\d+$/.test(cleaned)) {
-    candidate = cleaned;
-  } else {
-    const match = cleaned.match(/(?:ref_|r_|ref-|invite_)?(\d{5,20})/i);
-    if (match && match[1]) {
-      candidate = match[1];
+  let decoded = String(rawParam).trim();
+  if (!decoded || decoded === 'null' || decoded === 'undefined') return null;
+
+  // Try URL decoding (handles double-encoded start_param)
+  for (let i = 0; i < 2; i++) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
     }
+  }
+
+  const tryExtractNumericId = (input: string): string | null => {
+    const cleaned = input
+      .trim()
+      .replace(
+        /^(ref_|r_|ref-|invite_|inviter_|u_|user_|startapp=|start=|ref=)/i,
+        ''
+      )
+      .trim();
+
+    if (/^\d{5,20}$/.test(cleaned)) {
+      return cleaned;
+    }
+    const match = cleaned.match(
+      /(?:ref_|r_|ref-|invite_|inviter_|u_|user_)?(\d{5,20})/i
+    );
+    if (match && match[1]) {
+      return match[1];
+    }
+    return null;
+  };
+
+  let candidate = tryExtractNumericId(decoded);
+
+  // Also check if start_param was base64 encoded (e.g., cmVmXzEzNjg4OTk4NDI=)
+  if (!candidate && typeof atob === 'function') {
+    try {
+      const b64Normalized = decoded.replace(/-/g, '+').replace(/_/g, '/');
+      const padded =
+        b64Normalized + '='.repeat((4 - (b64Normalized.length % 4)) % 4);
+      const fromBase64 = atob(padded);
+      candidate = tryExtractNumericId(fromBase64);
+    } catch {}
   }
 
   if (!candidate) return null;
@@ -63,8 +98,10 @@ function extractReferrerFromUrlStrings(
     const queryCandidate =
       searchParams.get('startapp') ||
       searchParams.get('tgWebAppStartParam') ||
+      searchParams.get('start_param') ||
       searchParams.get('ref') ||
-      searchParams.get('start');
+      searchParams.get('start') ||
+      searchParams.get('inviter');
 
     const fromQuery = sanitizeReferrerId(queryCandidate, currentUserId);
     if (fromQuery) return fromQuery;
@@ -81,8 +118,10 @@ function extractReferrerFromUrlStrings(
       const hashCandidate =
         hashQuery.get('startapp') ||
         hashQuery.get('tgWebAppStartParam') ||
+        hashQuery.get('start_param') ||
         hashQuery.get('ref') ||
-        hashQuery.get('start');
+        hashQuery.get('start') ||
+        hashQuery.get('inviter');
 
       const fromHash = sanitizeReferrerId(hashCandidate, currentUserId);
       if (fromHash) return fromHash;
@@ -264,7 +303,7 @@ export function getEffectiveTelegramUser(): TelegramWebAppUser {
           search.get('start') ||
           search.get('tgWebAppStartParam') ||
           '';
-        const cleanedRef = rawRef.replace(/^(ref_|r_|ref-|invite_)/i, '').trim();
+        const cleanedRef = sanitizeReferrerId(rawRef);
         if (cleanedRef === '999999999') {
           const generatedId = String(
             Math.floor(100000000 + Math.random() * 800000000)
@@ -298,9 +337,10 @@ export function buildReferralLink(
   botUsername = 'KittyMedallion_bot',
   appShortName = ''
 ): string {
-  const cleanBot = botUsername.replace(/^@/, '');
-  if (appShortName) {
-    return `https://t.me/${cleanBot}/${appShortName}?startapp=ref_${userId}`;
+  const cleanBot = botUsername.replace(/^@/, '').trim() || 'KittyMedallion_bot';
+  const cleanShort = appShortName.replace(/^\/+|\/+$/g, '').trim();
+  if (cleanShort) {
+    return `https://t.me/${cleanBot}/${cleanShort}?startapp=ref_${userId}`;
   }
   return `https://t.me/${cleanBot}?startapp=ref_${userId}`;
 }

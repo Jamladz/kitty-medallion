@@ -292,6 +292,10 @@ app.post('/api/telegram-webhook', async (req, res) => {
       if (inviterId && inviterId !== newUserId) {
         serverLedger.pendingReferrals[newUserId] = inviterId;
         saveLedgerToDisk(true);
+        db.collection('pending_referrals')
+          .doc(newUserId)
+          .set({ referrerId: inviterId, timestamp: Date.now() }, { merge: true })
+          .catch(() => {});
       }
     }
     res.json({ ok: true });
@@ -349,7 +353,7 @@ function reconcileUserReferralsInLedger(userId: string) {
   return user;
 }
 
-// Merge client-cached user fields safely on initial hydration so an existing user never loses prior progress
+// Merge client-cached user fields safely so an existing user never loses prior progress or higher referral counts
 function mergeWithClientSnapshot(existing: any, clientSnap: any, userId: string) {
   if (!clientSnap || typeof clientSnap !== 'object' || String(clientSnap.id) !== String(userId)) {
     return existing;
@@ -364,36 +368,32 @@ function mergeWithClientSnapshot(existing: any, clientSnap: any, userId: string)
       _hydratedFromClient: true
     };
   }
-  if (existing._hydratedFromClient) {
-    return existing;
-  }
   const existingValidRef = getValidExistingReferrer(existing, userId);
+  const bestRefs = Math.max(
+    Number(existing.referralsCount) || 0,
+    Number(existing.referralCount) || 0,
+    Number(clientSnap.referralsCount) || 0,
+    Number(clientSnap.referralCount) || 0
+  );
   return {
     ...existing,
     balanceKitty: Math.max(Number(existing.balanceKitty) || 0, Number(clientSnap.balanceKitty) || 0),
     balanceUsdt: Math.max(Number(existing.balanceUsdt) || 0, Number(clientSnap.balanceUsdt) || 0),
     miningSpeed: Math.max(
       Number(existing.miningSpeed) || REFERRAL_REWARDS.BASE_MINING_SPEED,
-      Number(clientSnap.miningSpeed) || REFERRAL_REWARDS.BASE_MINING_SPEED
+      Number(clientSnap.miningSpeed) || REFERRAL_REWARDS.BASE_MINING_SPEED,
+      REFERRAL_REWARDS.BASE_MINING_SPEED + bestRefs * REFERRAL_REWARDS.REFERRER_SPEED_BOOST
     ),
-    referralsCount: Math.max(
-      Number(existing.referralsCount) || 0,
-      Number(existing.referralCount) || 0,
-      Number(clientSnap.referralsCount) || 0,
-      Number(clientSnap.referralCount) || 0
-    ),
-    referralCount: Math.max(
-      Number(existing.referralsCount) || 0,
-      Number(existing.referralCount) || 0,
-      Number(clientSnap.referralsCount) || 0,
-      Number(clientSnap.referralCount) || 0
-    ),
+    referralsCount: bestRefs,
+    referralCount: bestRefs,
     earnedReferralCoins: Math.max(
       Number(existing.earnedReferralCoins) || 0,
-      Number(clientSnap.earnedReferralCoins) || 0
+      Number(clientSnap.earnedReferralCoins) || 0,
+      bestRefs * REFERRAL_REWARDS.REFERRER_REWARD
     ),
     referredBy: existingValidRef || clientValidRef || null,
     referrerId: existingValidRef || clientValidRef || null,
+    welcomeUsdtGranted: Boolean(existing.welcomeUsdtGranted || clientSnap.welcomeUsdtGranted),
     claimedMilestones: Array.from(
       new Set([
         ...(Array.isArray(existing.claimedMilestones) ? existing.claimedMilestones : []),
@@ -414,33 +414,39 @@ async function executeAtomicReferralTransaction(params: {
   username: string;
   candidateRef: string | null;
   clientCachedUser?: any;
+  alreadyAppliedInFirestore?: boolean;
 }) {
-  const { userId, firstName, lastName, username, candidateRef, clientCachedUser } = params;
+  const {
+    userId,
+    firstName,
+    lastName,
+    username,
+    candidateRef,
+    clientCachedUser,
+    alreadyAppliedInFirestore = false
+  } = params;
   const now = Date.now();
 
-  // 1. Load existing user from Server Ledger first (0 Firestore reads if already known!)
+  // 1. Load existing user from Server Ledger and merge with latest Firestore document when reads are available
   let existingData = serverLedger.users[userId] || null;
 
-  // If not in serverLedger yet and Firestore reads are available, read once from Firestore
-  if (!existingData && isFirestoreReadAvailable()) {
+  if (isFirestoreReadAvailable()) {
     try {
       const snap = await db.collection('users').doc(userId).get();
       if (snap.exists) {
-        existingData = snap.data();
+        existingData = mergeWithClientSnapshot(snap.data(), existingData, userId);
       }
     } catch (err) {
       markFirestoreReadError(err);
     }
   }
 
-  // Merge with client-cached snapshot if available so prior balance is preserved even during Firestore quota cooldown
+  // Merge with client-cached snapshot if available so prior balance/referrals are always preserved
   existingData = mergeWithClientSnapshot(existingData, clientCachedUser, userId);
 
   const isNewUser = !existingData;
 
   // Check if this user already has a valid referrer
-  // NOTE: If the user entered the app before WITHOUT a referral link, existingReferrer is null,
-  // so they CAN be referred now when invited by a user!
   const existingReferrer = getValidExistingReferrer(existingData, userId);
   const cleanCandidate =
     candidateRef && candidateRef !== userId && /^\d+$/.test(candidateRef)
@@ -450,17 +456,31 @@ async function executeAtomicReferralTransaction(params: {
   const deterministicRefRecordId = cleanCandidate
     ? `${cleanCandidate}_${userId}`
     : null;
-  const recordAlreadyInLedger = deterministicRefRecordId
+
+  // Check both serverLedger and Firestore for existing referral record so we never double-credit
+  let recordAlreadyExists = deterministicRefRecordId
     ? Boolean(serverLedger.referrals[deterministicRefRecordId])
     : false;
 
-  // Load referrer data if we have a candidate referrer
+  if (deterministicRefRecordId && !recordAlreadyExists && isFirestoreReadAvailable()) {
+    try {
+      const recSnap = await db.collection('referrals').doc(deterministicRefRecordId).get();
+      if (recSnap.exists) {
+        recordAlreadyExists = true;
+        serverLedger.referrals[deterministicRefRecordId] = recSnap.data();
+      }
+    } catch (err) {
+      markFirestoreReadError(err);
+    }
+  }
+
+  // Load referrer data from Firestore if we have a candidate referrer
   let referrerData = cleanCandidate ? serverLedger.users[cleanCandidate] || null : null;
-  if (cleanCandidate && !referrerData && isFirestoreReadAvailable()) {
+  if (cleanCandidate && isFirestoreReadAvailable()) {
     try {
       const refSnap = await db.collection('users').doc(cleanCandidate).get();
       if (refSnap.exists) {
-        referrerData = refSnap.data();
+        referrerData = mergeWithClientSnapshot(refSnap.data(), referrerData, cleanCandidate);
         serverLedger.users[cleanCandidate] = referrerData;
       }
     } catch (err) {
@@ -473,22 +493,25 @@ async function executeAtomicReferralTransaction(params: {
     referrerData &&
     getValidExistingReferrer(referrerData, cleanCandidate!) === userId;
 
-  // Apply referral if:
-  // 1) User has never been referred before (!existingReferrer) — even if they entered the app before without a link!
-  // 2) OR existingReferrer === cleanCandidate AND the referral record wasn't created yet (!recordAlreadyInLedger)
   const shouldApplyReferral = Boolean(
     cleanCandidate &&
       deterministicRefRecordId &&
       !isCircular &&
       (!existingReferrer ||
-        (existingReferrer === cleanCandidate && !recordAlreadyInLedger))
+        (existingReferrer === cleanCandidate && !recordAlreadyExists))
   );
 
-  const grantsWelcomeBonus = Boolean(shouldApplyReferral && !existingReferrer);
-  const needsWelcomeUsdt = Boolean(
-    (shouldApplyReferral || existingReferrer) && !existingData?.welcomeUsdtGranted
+  const grantsWelcomeBonus = Boolean(
+    shouldApplyReferral && !existingReferrer && !alreadyAppliedInFirestore
   );
-  const creditsReferrer = Boolean(shouldApplyReferral && !recordAlreadyInLedger);
+  const needsWelcomeUsdt = Boolean(
+    (shouldApplyReferral || existingReferrer) &&
+      !existingData?.welcomeUsdtGranted &&
+      !alreadyAppliedInFirestore
+  );
+  const creditsReferrer = Boolean(
+    shouldApplyReferral && !recordAlreadyExists && !alreadyAppliedInFirestore
+  );
 
   // Step A: Build/Update the current user (referred user) in serverLedger
   let finalUserData: any;
@@ -500,7 +523,7 @@ async function executeAtomicReferralTransaction(params: {
       username: username || '',
       balanceKitty: grantsWelcomeBonus ? REFERRAL_REWARDS.WELCOME_BONUS : 0,
       balanceUsdt: needsWelcomeUsdt ? REFERRAL_REWARDS.WELCOME_BONUS_USDT : 0,
-      welcomeUsdtGranted: needsWelcomeUsdt,
+      welcomeUsdtGranted: Boolean(needsWelcomeUsdt || alreadyAppliedInFirestore),
       miningSpeed: REFERRAL_REWARDS.BASE_MINING_SPEED,
       referralCount: 0,
       referralsCount: 0,
@@ -526,7 +549,9 @@ async function executeAtomicReferralTransaction(params: {
       balanceUsdt:
         (Number(existingData.balanceUsdt) || 0) +
         (needsWelcomeUsdt ? REFERRAL_REWARDS.WELCOME_BONUS_USDT : 0),
-      welcomeUsdtGranted: Boolean(existingData.welcomeUsdtGranted || needsWelcomeUsdt),
+      welcomeUsdtGranted: Boolean(
+        existingData.welcomeUsdtGranted || needsWelcomeUsdt || alreadyAppliedInFirestore
+      ),
       referredBy: shouldApplyReferral ? cleanCandidate : existingReferrer,
       referrerId: shouldApplyReferral ? cleanCandidate : existingReferrer,
       referredAt: shouldApplyReferral
@@ -547,7 +572,6 @@ async function executeAtomicReferralTransaction(params: {
       finalUserData.username ||
       `Miner #${userId.slice(-4)}`;
 
-    // Record in global referrals ledger first
     const refRecord = {
       id: deterministicRefRecordId,
       referrerId: cleanCandidate,
@@ -562,7 +586,6 @@ async function executeAtomicReferralTransaction(params: {
     };
     serverLedger.referrals[deterministicRefRecordId] = refRecord;
 
-    // Update or create the referrer in serverLedger
     if (!referrerData) {
       referrerData = {
         id: cleanCandidate,
@@ -585,6 +608,9 @@ async function executeAtomicReferralTransaction(params: {
         createdAt: now
       };
       serverLedger.users[cleanCandidate] = referrerData;
+      if (creditsReferrer) {
+        syncDocToFirestoreWriteOnly('users', cleanCandidate, referrerData);
+      }
     } else if (creditsReferrer) {
       const nextCount =
         Math.max(
@@ -607,23 +633,33 @@ async function executeAtomicReferralTransaction(params: {
           REFERRAL_REWARDS.REFERRER_REWARD
       };
       serverLedger.users[cleanCandidate] = referrerData;
+
+      // Atomic increment in Firestore so we never overwrite the referrer's balance with stale data!
+      db.collection('users')
+        .doc(cleanCandidate)
+        .update({
+          balanceKitty: FieldValue.increment(REFERRAL_REWARDS.REFERRER_REWARD),
+          miningSpeed: FieldValue.increment(REFERRAL_REWARDS.REFERRER_SPEED_BOOST),
+          referralCount: FieldValue.increment(1),
+          referralsCount: FieldValue.increment(1),
+          earnedReferralCoins: FieldValue.increment(REFERRAL_REWARDS.REFERRER_REWARD)
+        })
+        .catch(() => {
+          syncDocToFirestoreWriteOnly('users', cleanCandidate, serverLedger.users[cleanCandidate]);
+        });
     }
 
     reconcileUserReferralsInLedger(cleanCandidate);
-
-    // Non-blocking write-only sync to Firestore (0 Firestore reads!)
-    syncDocToFirestoreWriteOnly('users', cleanCandidate, serverLedger.users[cleanCandidate]);
     syncDocToFirestoreWriteOnly('referrals', deterministicRefRecordId, refRecord);
   }
 
-  // Persist ledger to disk and sync current user to Firestore (write-only, 0 reads)
   saveLedgerToDisk(referralApplied || needsWelcomeUsdt);
   syncDocToFirestoreWriteOnly('users', userId, serverLedger.users[userId]);
 
   return {
     isNewUser,
     referralApplied,
-    welcomeGiftGranted: Boolean(referralApplied || needsWelcomeUsdt),
+    welcomeGiftGranted: Boolean(grantsWelcomeBonus || needsWelcomeUsdt),
     user: serverLedger.users[userId]
   };
 }
@@ -647,12 +683,21 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
     ? new URLSearchParams(rawInitData).get('start_param')
     : null;
 
-  const candidateRef =
+  let candidateRef =
     extractReferrerId(bodyReferrerId) ||
     extractReferrerId(bodyStartParam) ||
     extractReferrerId(initDataStartParam) ||
     serverLedger.pendingReferrals[userId] ||
     null;
+
+  if (!candidateRef && isFirestoreReadAvailable()) {
+    try {
+      const pendingSnap = await db.collection('pending_referrals').doc(userId).get();
+      if (pendingSnap.exists) {
+        candidateRef = extractReferrerId(pendingSnap.data()?.referrerId);
+      }
+    } catch {}
+  }
 
   try {
     const { isNewUser, referralApplied, welcomeGiftGranted, user } =
@@ -665,9 +710,12 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
         clientCachedUser
       });
 
-    if (referralApplied && serverLedger.pendingReferrals[userId]) {
-      delete serverLedger.pendingReferrals[userId];
-      saveLedgerToDisk();
+    if (referralApplied) {
+      if (serverLedger.pendingReferrals[userId]) {
+        delete serverLedger.pendingReferrals[userId];
+        saveLedgerToDisk();
+      }
+      db.collection('pending_referrals').doc(userId).set({ referrerId: null }, { merge: true }).catch(() => {});
     }
 
     res.json({
@@ -708,12 +756,16 @@ app.post('/api/referrals/process', authenticateTelegram, async (req, res) => {
         lastName: tUser.last_name || '',
         username: tUser.username || '',
         candidateRef,
-        clientCachedUser: req.body?.clientCachedUser
+        clientCachedUser: req.body?.clientCachedUser,
+        alreadyAppliedInFirestore: Boolean(req.body?.alreadyAppliedInFirestore)
       });
 
-    if (referralApplied && serverLedger.pendingReferrals[userId]) {
-      delete serverLedger.pendingReferrals[userId];
-      saveLedgerToDisk();
+    if (referralApplied) {
+      if (serverLedger.pendingReferrals[userId]) {
+        delete serverLedger.pendingReferrals[userId];
+        saveLedgerToDisk();
+      }
+      db.collection('pending_referrals').doc(userId).set({ referrerId: null }, { merge: true }).catch(() => {});
     }
 
     res.json({ applied: referralApplied, welcomeGiftGranted, user });
@@ -735,11 +787,11 @@ app.post('/api/referrals/claim-milestone', authenticateTelegram, async (req, res
   try {
     reconcileUserReferralsInLedger(userId);
     let user = serverLedger.users[userId];
-    if (!user && isFirestoreReadAvailable()) {
+    if (isFirestoreReadAvailable()) {
       try {
         const snap = await db.collection('users').doc(userId).get();
         if (snap.exists) {
-          user = snap.data();
+          user = mergeWithClientSnapshot(snap.data(), user, userId);
           serverLedger.users[userId] = user;
         }
       } catch (err) {
@@ -800,7 +852,7 @@ app.get('/api/referrals', authenticateTelegram, async (req, res) => {
   const userId = String((req as any).userId);
 
   try {
-    // 1. Collect all referrals for this referrer from persistent serverLedger (0 Firestore reads!)
+    // 1. Collect all referrals for this referrer from persistent serverLedger
     const byReferredId = new Map<string, any>();
     for (const rec of Object.values(serverLedger.referrals)) {
       if (String(rec.referrerId) === userId) {
@@ -809,13 +861,22 @@ app.get('/api/referrals', authenticateTelegram, async (req, res) => {
       }
     }
 
-    // 2. If Firestore reads are available and user specifically has no ledger referrals yet, check Firestore once
-    if (byReferredId.size === 0 && isFirestoreReadAvailable()) {
+    // 2. Always query Firestore `referrals` and `users` when Firestore reads are available so cross-device referrals appear immediately
+    if (isFirestoreReadAvailable()) {
       try {
-        const refSnap = await db
-          .collection('referrals')
-          .where('referrerId', '==', userId)
-          .get();
+        const [refSnap, referredUsersSnap, userSnap] = await Promise.all([
+          db.collection('referrals').where('referrerId', '==', userId).get(),
+          db.collection('users').where('referredBy', '==', userId).get(),
+          db.collection('users').doc(userId).get()
+        ]);
+
+        if (userSnap.exists) {
+          serverLedger.users[userId] = mergeWithClientSnapshot(
+            userSnap.data(),
+            serverLedger.users[userId],
+            userId
+          );
+        }
 
         for (const d of refSnap.docs) {
           const data = d.data();
@@ -836,7 +897,33 @@ app.get('/api/referrals', authenticateTelegram, async (req, res) => {
             serverLedger.referrals[item.id] = item;
           }
         }
-        if (refSnap.docs.length > 0) {
+
+        for (const uDoc of referredUsersSnap.docs) {
+          const uData = uDoc.data();
+          const refId = String(uData.id || uDoc.id);
+          if (refId && refId !== userId && !byReferredId.has(refId)) {
+            const fullName =
+              `${uData.firstName || ''} ${uData.lastName || ''}`.trim() ||
+              uData.username ||
+              `Miner #${refId.slice(-4)}`;
+            const item = {
+              id: `${userId}_${refId}`,
+              referrerId: userId,
+              referredId: refId,
+              referredName: fullName,
+              referredUsername: uData.username || '',
+              rewardAmount: REFERRAL_REWARDS.REFERRER_REWARD,
+              welcomeBonus: REFERRAL_REWARDS.WELCOME_BONUS,
+              speedBoost: REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
+              timestamp: uData.referredAt || uData.createdAt || Date.now()
+            };
+            byReferredId.set(refId, item);
+            serverLedger.referrals[item.id] = item;
+            syncDocToFirestoreWriteOnly('referrals', item.id, item);
+          }
+        }
+
+        if (refSnap.docs.length > 0 || referredUsersSnap.docs.length > 0) {
           saveLedgerToDisk();
         }
       } catch (fsErr) {
