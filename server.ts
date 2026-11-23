@@ -132,7 +132,6 @@ const DEFAULT_TASKS = [
 ];
 
 // In-memory server caches to drastically reduce Firestore read quota usage
-let leaderboardCache: { data: any[]; expiresAt: number } | null = null;
 const referralsCache = new Map<string, { data: any[]; expiresAt: number }>();
 const tasksCompletionCache = new Map<string, { completedIds: Set<string>; expiresAt: number }>();
 let earlyStateCache: { count: number; expiresAt: number } | null = null;
@@ -141,9 +140,13 @@ const extractReferrerId = (rawParam?: string | null): string | null => {
   if (!rawParam) return null;
   const cleaned = String(rawParam).trim();
   if (!cleaned) return null;
-  const withoutPrefix = cleaned.replace(/^(ref_|r_|ref-|invite_)/i, '');
+  const withoutPrefix = cleaned.replace(/^(ref_|r_|ref-|invite_|startapp=)/i, '').trim();
   if (/^\d+$/.test(withoutPrefix)) {
     return withoutPrefix;
+  }
+  const match = withoutPrefix.match(/(?:ref_|r_|ref-|invite_)?(\d{5,20})/i);
+  if (match && match[1]) {
+    return match[1];
   }
   return null;
 };
@@ -175,7 +178,7 @@ app.get('/api/bot-info', async (_req, res) => {
   res.json({ botUsername, appShortName });
 });
 
-// In-memory map for webhook `/start ref_ID` so we don't even burn a Firestore read on every login!
+// In-memory map for webhook `/start ref_ID` so we don't burn a Firestore read on every login
 const pendingWebhookReferrals = new Map<string, string>();
 
 app.post('/api/telegram-webhook', async (req, res) => {
@@ -245,8 +248,14 @@ async function executeAtomicReferralTransaction(params: {
     const refUserRef = validReferrer
       ? db.collection('users').doc(validReferrer)
       : null;
+    const deterministicRefRecordId = validReferrer
+      ? `${validReferrer}_${userId}`
+      : null;
+    const referralRecordRef = deterministicRefRecordId
+      ? db.collection('referrals').doc(deterministicRefRecordId)
+      : null;
 
-    // Only read referrer doc if we actually have a valid new referral to apply (saves reads!)
+    // Only read referrer doc if we actually have a valid new referral to apply
     if (refUserRef) {
       referrerDoc = await t.get(refUserRef);
     }
@@ -261,10 +270,10 @@ async function executeAtomicReferralTransaction(params: {
         referrerDoc.data()?.referrerId === userId);
 
     const shouldApplyReferral = Boolean(
-      validReferrer && refUserRef && !alreadyReferred && !isCircular
+      validReferrer && refUserRef && referralRecordRef && !alreadyReferred && !isCircular
     );
 
-    // Step A: Create or Update the referred user document (skip unnecessary writes if nothing changed)
+    // Step A: Create or Update the referred user document
     if (!userDoc.exists) {
       isNewUser = true;
       finalUserData = {
@@ -322,10 +331,9 @@ async function executeAtomicReferralTransaction(params: {
     }
 
     // Step B & C: Update/Create the referrer document AND create record in "referrals" collection
-    if (shouldApplyReferral && validReferrer && refUserRef) {
+    if (shouldApplyReferral && validReferrer && refUserRef && referralRecordRef) {
       referralApplied = true;
       referralsCache.delete(validReferrer);
-      leaderboardCache = null;
 
       if (!referrerDoc || !referrerDoc.exists) {
         t.set(refUserRef, {
@@ -358,7 +366,6 @@ async function executeAtomicReferralTransaction(params: {
         });
       }
 
-      const referralRecordRef = db.collection('referrals').doc();
       t.set(referralRecordRef, {
         id: referralRecordRef.id,
         referrerId: validReferrer,
@@ -391,7 +398,7 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
     ? new URLSearchParams(rawInitData).get('start_param')
     : null;
 
-  let candidateRef =
+  const candidateRef =
     extractReferrerId(bodyReferrerId) ||
     extractReferrerId(bodyStartParam) ||
     extractReferrerId(initDataStartParam) ||
@@ -434,14 +441,14 @@ app.post('/api/referrals/process', authenticateTelegram, async (req, res) => {
   }
 
   try {
-    const { referralApplied } = await executeAtomicReferralTransaction({
+    const { referralApplied, user } = await executeAtomicReferralTransaction({
       userId,
       firstName: tUser.first_name || '',
       lastName: tUser.last_name || '',
       username: tUser.username || '',
       candidateRef
     });
-    res.json({ applied: referralApplied });
+    res.json({ applied: referralApplied, user });
   } catch (error: any) {
     console.error('Process referral error:', error);
     res.status(400).json({ error: error.message || 'Referral processing failed' });
@@ -503,93 +510,50 @@ app.post('/api/referrals/claim-milestone', authenticateTelegram, async (req, res
 
 app.get('/api/referrals', authenticateTelegram, async (req, res) => {
   const userId = String((req as any).userId);
+  const force = req.query.force === '1';
   const now = Date.now();
 
-  // Check 2-minute server cache first
+  // Check 2-minute server cache first (unless force refresh requested)
   const cached = referralsCache.get(userId);
-  if (cached && cached.expiresAt > now) {
+  if (!force && cached && cached.expiresAt > now) {
     return res.json({ referrals: cached.data, count: cached.data.length });
   }
 
   try {
-    // Query ONLY the dedicated "referrals" collection (no extra users collection scan!)
     const refSnap = await db
       .collection('referrals')
       .where('referrerId', '==', userId)
       .get();
 
-    const referrals = refSnap.docs
-      .map((d) => {
-        const data = d.data();
-        return {
+    // Deduplicate by referredId in case legacy random-ID documents exist alongside deterministic ones
+    const byReferredId = new Map<string, any>();
+    for (const d of refSnap.docs) {
+      const data = d.data();
+      const refId = String(data.referredId || d.id);
+      if (!byReferredId.has(refId)) {
+        byReferredId.set(refId, {
           id: d.id,
           referrerId: data.referrerId,
-          referredId: data.referredId,
+          referredId: refId,
           referredName: data.referredName || 'Telegram Friend',
           referredUsername: data.referredUsername || '',
           rewardAmount: data.rewardAmount || REFERRAL_REWARDS.REFERRER_REWARD,
           welcomeBonus: data.welcomeBonus || REFERRAL_REWARDS.WELCOME_BONUS,
           speedBoost: data.speedBoost || REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
           timestamp: data.timestamp || Date.now()
-        };
-      })
-      .sort((a, b) => b.timestamp - a.timestamp);
+        });
+      }
+    }
+
+    const referrals = Array.from(byReferredId.values()).sort(
+      (a, b) => b.timestamp - a.timestamp
+    );
 
     referralsCache.set(userId, { data: referrals, expiresAt: now + 2 * 60 * 1000 });
     res.json({ referrals, count: referrals.length });
   } catch (error) {
     console.error('Get referrals error:', error);
     res.status(500).json({ error: 'Failed to load referrals' });
-  }
-});
-
-app.get('/api/referrals/leaderboard', authenticateTelegram, async (req, res) => {
-  const userId = String((req as any).userId);
-  const maxLimit = Math.min(20, Math.max(5, Number(req.query.limit) || 10));
-  const now = Date.now();
-
-  try {
-    let rawTopUsers: any[] = [];
-    // Use 5-minute server-side cache so leaderboard doesn't burn 15 reads on every user tab click
-    if (leaderboardCache && leaderboardCache.expiresAt > now) {
-      rawTopUsers = leaderboardCache.data;
-    } else {
-      const snap = await db
-        .collection('users')
-        .orderBy('referralsCount', 'desc')
-        .limit(maxLimit)
-        .get();
-
-      rawTopUsers = snap.docs.map((d, idx) => {
-        const data = d.data();
-        const count = Math.max(data.referralsCount || 0, data.referralCount || 0);
-        return {
-          id: d.id,
-          firstName: data.firstName || 'Miner',
-          lastName: data.lastName || '',
-          username: data.username || '',
-          referralsCount: count,
-          earnedReferralCoins:
-            data.earnedReferralCoins || count * REFERRAL_REWARDS.REFERRER_REWARD,
-          rank: idx + 1
-        };
-      });
-
-      leaderboardCache = {
-        data: rawTopUsers,
-        expiresAt: now + 5 * 60 * 1000
-      };
-    }
-
-    const leaderboard = rawTopUsers.map((entry) => ({
-      ...entry,
-      isCurrentUser: String(entry.id) === userId
-    }));
-
-    res.json({ leaderboard });
-  } catch (error) {
-    console.error('Leaderboard error:', error);
-    res.status(500).json({ error: 'Failed to load leaderboard' });
   }
 });
 

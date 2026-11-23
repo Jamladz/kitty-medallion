@@ -5,10 +5,8 @@ import {
   collection,
   query,
   where,
-  orderBy,
   limit,
   getDocs,
-  onSnapshot,
   runTransaction,
   increment,
   arrayUnion,
@@ -86,17 +84,6 @@ export interface ReferralRecord {
   timestamp: number;
 }
 
-export interface LeaderboardEntry {
-  id: string;
-  firstName: string;
-  lastName: string;
-  username: string;
-  referralsCount: number;
-  earnedReferralCoins: number;
-  isCurrentUser: boolean;
-  rank: number;
-}
-
 // ============================================================================
 // 2. REFERRAL DETECTION & LINK GENERATION HELPERS
 // ============================================================================
@@ -109,65 +96,126 @@ export function sanitizeReferrerId(
   currentUserId?: string
 ): string | null {
   if (!rawParam) return null;
-  const cleaned = String(rawParam).trim().replace(/^(ref_|r_|ref-|invite_)/i, '').trim();
-  if (!cleaned || !/^\d+$/.test(cleaned)) return null;
-  if (currentUserId && cleaned === String(currentUserId)) {
+  const cleaned = String(rawParam)
+    .trim()
+    .replace(/^(ref_|r_|ref-|invite_|startapp=)/i, '')
+    .trim();
+
+  let candidate: string | null = null;
+  if (/^\d+$/.test(cleaned)) {
+    candidate = cleaned;
+  } else {
+    const match = cleaned.match(/(?:ref_|r_|ref-|invite_)?(\d{5,20})/i);
+    if (match && match[1]) {
+      candidate = match[1];
+    }
+  }
+
+  if (!candidate) return null;
+  if (currentUserId && candidate === String(currentUserId)) {
     // Self-referral check -> ignore completely
     return null;
   }
-  return cleaned;
+  return candidate;
+}
+
+export function clearPendingReferrer() {
+  try {
+    sessionStorage.removeItem('kitty_detected_referrer');
+    localStorage.removeItem('kitty_pending_referrer');
+  } catch {}
+}
+
+function persistDetectedReferrer(refId: string) {
+  try {
+    sessionStorage.setItem('kitty_detected_referrer', refId);
+    localStorage.setItem('kitty_pending_referrer', refId);
+  } catch {}
 }
 
 /**
  * Reads the referrer ID on app launch in exact priority order:
- * 1) Telegram WebApp start_param (initDataUnsafe.start_param)
- * 2) Fallback: Page URL query parameters (startapp / ref / start / tgWebAppStartParam)
+ * 1) Telegram WebApp start_param (initDataUnsafe.start_param or initData start_param)
+ * 2) Fallback: Page URL query & hash parameters (startapp / ref / start / tgWebAppStartParam)
+ * 3) Persisted pending referrer from session/localStorage if not yet applied
  */
 export function detectReferrerOnLaunch(currentUserId?: string): string | null {
   if (typeof window === 'undefined') return null;
 
-  // Priority A: Telegram WebApp initDataUnsafe.start_param
+  // Priority A1: Telegram WebApp initDataUnsafe.start_param
   const tgStartParam = window.Telegram?.WebApp?.initDataUnsafe?.start_param;
   const fromTelegram = sanitizeReferrerId(tgStartParam, currentUserId);
   if (fromTelegram) {
-    try {
-      sessionStorage.setItem('kitty_detected_referrer', fromTelegram);
-    } catch {}
+    persistDetectedReferrer(fromTelegram);
     return fromTelegram;
   }
+
+  // Priority A2: Telegram WebApp raw initData string start_param
+  try {
+    const rawInitData = window.Telegram?.WebApp?.initData;
+    if (rawInitData) {
+      const initParams = new URLSearchParams(rawInitData);
+      const fromRawInit = sanitizeReferrerId(
+        initParams.get('start_param'),
+        currentUserId
+      );
+      if (fromRawInit) {
+        persistDetectedReferrer(fromRawInit);
+        return fromRawInit;
+      }
+    }
+  } catch {}
 
   // Priority B: Fallback query parameters from window.location.search & hash
   try {
     const searchParams = new URLSearchParams(window.location.search);
     const queryCandidate =
       searchParams.get('startapp') ||
+      searchParams.get('tgWebAppStartParam') ||
       searchParams.get('ref') ||
-      searchParams.get('start') ||
-      searchParams.get('tgWebAppStartParam');
+      searchParams.get('start');
 
     const fromQuery = sanitizeReferrerId(queryCandidate, currentUserId);
     if (fromQuery) {
-      sessionStorage.setItem('kitty_detected_referrer', fromQuery);
+      persistDetectedReferrer(fromQuery);
       return fromQuery;
     }
 
     // Check hash params if Telegram client attached them after #
     const hashStr = window.location.hash.replace(/^#/, '');
     const qIdx = hashStr.indexOf('?');
-    const hashQuery = new URLSearchParams(qIdx >= 0 ? hashStr.slice(qIdx + 1) : hashStr);
+    const hashQuery = new URLSearchParams(
+      qIdx >= 0 ? hashStr.slice(qIdx + 1) : hashStr
+    );
     const hashCandidate =
       hashQuery.get('startapp') ||
+      hashQuery.get('tgWebAppStartParam') ||
       hashQuery.get('ref') ||
-      hashQuery.get('start') ||
-      hashQuery.get('tgWebAppStartParam');
+      hashQuery.get('start');
 
     const fromHash = sanitizeReferrerId(hashCandidate, currentUserId);
     if (fromHash) {
-      sessionStorage.setItem('kitty_detected_referrer', fromHash);
+      persistDetectedReferrer(fromHash);
       return fromHash;
     }
 
-    const cached = sessionStorage.getItem('kitty_detected_referrer');
+    // Also inspect tgWebAppData inside hash if present
+    const tgWebAppData = hashQuery.get('tgWebAppData');
+    if (tgWebAppData) {
+      const innerParams = new URLSearchParams(tgWebAppData);
+      const fromInner = sanitizeReferrerId(
+        innerParams.get('start_param'),
+        currentUserId
+      );
+      if (fromInner) {
+        persistDetectedReferrer(fromInner);
+        return fromInner;
+      }
+    }
+
+    const cached =
+      sessionStorage.getItem('kitty_detected_referrer') ||
+      localStorage.getItem('kitty_pending_referrer');
     if (cached) {
       return sanitizeReferrerId(cached, currentUserId);
     }
@@ -197,8 +245,7 @@ export function buildReferralLink(
  * https://t.me/share/url?url=...&text=...
  */
 export function buildTelegramShareUrl(referralLink: string): string {
-  const promoText =
-    `🐱🪙 Join me on Kitty Medallion! Mine every 24 hours, climb the Milestone ranks, and get an instant +${REFERRAL_CONFIG.WELCOME_BONUS} KITTY Welcome Bonus when you launch now!`;
+  const promoText = `🐱🪙 Join me on Kitty Medallion! Mine every 24 hours, climb the Milestone ranks, and get an instant +${REFERRAL_CONFIG.WELCOME_BONUS} KITTY Welcome Bonus when you launch now!`;
   return `https://t.me/share/url?url=${encodeURIComponent(
     referralLink
   )}&text=${encodeURIComponent(promoText)}`;
@@ -235,18 +282,20 @@ const callBackendApi = async (path: string, options: RequestInit = {}) => {
   return response.json();
 };
 
-// Client-side memory caches for Referral Hub to avoid repeated Firestore reads
-const myReferralsClientCache = new Map<string, { data: ReferralRecord[]; expiresAt: number }>();
-let leaderboardClientCache: { data: LeaderboardEntry[]; expiresAt: number } | null = null;
+// Client-side memory cache for Referral Hub to avoid repeated Firestore reads
+const myReferralsClientCache = new Map<
+  string,
+  { data: ReferralRecord[]; expiresAt: number }
+>();
 
 export const referralService = {
   /**
    * Executes the atomic referral attribution:
-   * 1. Verifies Telegram initData signature on the backend first.
+   * 1. Calls the backend atomic transaction first.
    * 2. Falls back to the exact client-side Firestore runTransaction if offline/dev:
    *    a) Updates/Creates current user document: sets referredBy = referrerId, grants WELCOME_BONUS (+100) via increment().
    *    b) Updates/Creates referrer document: grants REFERRER_REWARD (+250) + increments referralsCount (+1) + increments earnedReferralCoins (+250).
-   *    c) Creates a separate document in global "referrals" collection (auto ID) with referrerId, referredId, referredName, rewardAmount, timestamp.
+   *    c) Creates a separate document in global "referrals" collection with referrerId, referredId, referredName, rewardAmount, timestamp.
    */
   processReferral: async (params: {
     currentUserId: string;
@@ -269,19 +318,26 @@ export const referralService = {
     }
 
     myReferralsClientCache.delete(referrerId);
-    leaderboardClientCache = null;
 
     try {
-      return await callBackendApi('/referrals/process', {
+      const res = await callBackendApi('/referrals/process', {
         method: 'POST',
         body: JSON.stringify({ referrerId }),
       });
+      if (res?.applied || res?.user?.referredBy) {
+        clearPendingReferrer();
+      }
+      return res;
     } catch (err) {
-      console.warn('Backend processReferral unavailable, executing atomic Firestore runTransaction', err);
+      console.warn(
+        'Backend processReferral unavailable, executing atomic Firestore runTransaction',
+        err
+      );
 
       const referredUserRef = doc(db, 'users', currentUserId);
       const referrerUserRef = doc(db, 'users', referrerId);
-      const referralRecordRef = doc(collection(db, 'referrals')); // Auto-ID in global "referrals" collection
+      const deterministicId = `${referrerId}_${currentUserId}`;
+      const referralRecordRef = doc(db, 'referrals', deterministicId);
 
       let applied = false;
 
@@ -291,15 +347,15 @@ export const referralService = {
           transaction.get(referrerUserRef),
         ]);
 
-        // Check if current user was already referred before (referredBy or referrerId)
+        // Check if current user was already referred before
         if (referredSnap.exists()) {
           const existingData = referredSnap.data();
           if (existingData.referredBy || existingData.referrerId) {
-            return; // Already referred -> prevent duplicate reward
+            return;
           }
         }
 
-        // Prevent circular referral if referrer exists and was referred by currentUserId
+        // Prevent circular referral
         if (referrerSnap.exists()) {
           const refData = referrerSnap.data();
           if (
@@ -346,7 +402,7 @@ export const referralService = {
           });
         }
 
-        // Step B: Update or Create the referrer's document (never ignore if referrer doc doesn't exist yet)
+        // Step B: Update or Create the referrer's document
         if (!referrerSnap.exists()) {
           transaction.set(referrerUserRef, {
             id: referrerId,
@@ -378,9 +434,9 @@ export const referralService = {
           });
         }
 
-        // Step C: Create separate audit record in global "referrals" collection (Auto-ID)
+        // Step C: Create separate audit record in global "referrals" collection
         transaction.set(referralRecordRef, {
-          id: referralRecordRef.id,
+          id: deterministicId,
           referrerId,
           referredId: currentUserId,
           referredName: fullName,
@@ -393,6 +449,10 @@ export const referralService = {
 
         applied = true;
       });
+
+      if (applied) {
+        clearPendingReferrer();
+      }
 
       return { applied };
     }
@@ -470,7 +530,10 @@ export const referralService = {
    * Queries the "referrals" collection where('referrerId', '==', userId) ordered descending by timestamp
    * Uses a 2-minute client memory cache to prevent redundant reads on tab navigation.
    */
-  getMyReferrals: async (userId: string, forceRefresh = false): Promise<ReferralRecord[]> => {
+  getMyReferrals: async (
+    userId: string,
+    forceRefresh = false
+  ): Promise<ReferralRecord[]> => {
     const now = Date.now();
     const cached = myReferralsClientCache.get(userId);
     if (!forceRefresh && cached && cached.expiresAt > now) {
@@ -478,7 +541,9 @@ export const referralService = {
     }
 
     try {
-      const res = await callBackendApi('/referrals');
+      const res = await callBackendApi(
+        forceRefresh ? '/referrals?force=1' : '/referrals'
+      );
       if (res && Array.isArray(res.referrals)) {
         myReferralsClientCache.set(userId, {
           data: res.referrals,
@@ -487,22 +552,33 @@ export const referralService = {
         return res.referrals;
       }
     } catch (err) {
-      console.warn('Backend getMyReferrals failed, querying Firestore referrals collection directly', err);
+      console.warn(
+        'Backend getMyReferrals failed, querying Firestore referrals collection directly',
+        err
+      );
     }
 
     try {
       const qFallback = query(
         collection(db, 'referrals'),
         where('referrerId', '==', userId),
-        limit(25)
+        limit(30)
       );
       const snapFallback = await getDocs(qFallback);
-      const items = snapFallback.docs
-        .map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<ReferralRecord, 'id'>),
-        }))
-        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      const byReferred = new Map<string, ReferralRecord>();
+      for (const d of snapFallback.docs) {
+        const data = d.data() as Omit<ReferralRecord, 'id'>;
+        const refId = String(data.referredId || d.id);
+        if (!byReferred.has(refId)) {
+          byReferred.set(refId, {
+            id: d.id,
+            ...data,
+          });
+        }
+      }
+      const items = Array.from(byReferred.values()).sort(
+        (a, b) => (b.timestamp || 0) - (a.timestamp || 0)
+      );
 
       myReferralsClientCache.set(userId, {
         data: items,
@@ -510,69 +586,8 @@ export const referralService = {
       });
       return items;
     } catch {
-      return [];
-    }
-  },
-
-  /**
-   * Weekly / Top Referrers Leaderboard:
-   * Queries "users" ordered descending by referralsCount with a limit, marking isCurrentUser.
-   * Cached for 5 minutes on the client so switching tabs costs 0 reads!
-   */
-  getLeaderboard: async (
-    currentUserId: string,
-    maxLimit = 10
-  ): Promise<LeaderboardEntry[]> => {
-    const now = Date.now();
-    if (leaderboardClientCache && leaderboardClientCache.expiresAt > now) {
-      return leaderboardClientCache.data.map((item) => ({
-        ...item,
-        isCurrentUser: String(item.id) === String(currentUserId),
-      }));
-    }
-
-    try {
-      const res = await callBackendApi(`/referrals/leaderboard?limit=${maxLimit}`);
-      if (res && Array.isArray(res.leaderboard)) {
-        leaderboardClientCache = {
-          data: res.leaderboard,
-          expiresAt: now + 5 * 60 * 1000,
-        };
-        return res.leaderboard;
-      }
-    } catch (err) {
-      console.warn('Backend getLeaderboard failed, querying Firestore directly', err);
-    }
-
-    try {
-      const q = query(
-        collection(db, 'users'),
-        orderBy('referralsCount', 'desc'),
-        limit(maxLimit)
-      );
-      const snap = await getDocs(q);
-      const list = snap.docs.map((d, index) => {
-        const data = d.data();
-        const count = Math.max(data.referralsCount || 0, data.referralCount || 0);
-        return {
-          id: d.id,
-          firstName: data.firstName || 'Miner',
-          lastName: data.lastName || '',
-          username: data.username || '',
-          referralsCount: count,
-          earnedReferralCoins:
-            data.earnedReferralCoins || count * REFERRAL_CONFIG.REFERRER_REWARD,
-          isCurrentUser: String(d.id) === String(currentUserId),
-          rank: index + 1,
-        };
-      });
-      leaderboardClientCache = {
-        data: list,
-        expiresAt: now + 5 * 60 * 1000,
-      };
-      return list;
-    } catch {
-      return [];
+      return cached?.data || [];
     }
   },
 };
+

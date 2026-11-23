@@ -4,6 +4,7 @@ import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import { api, getEffectiveTelegramUser } from '../lib/api';
 import {
   detectReferrerOnLaunch,
+  clearPendingReferrer,
   referralService,
   REFERRAL_CONFIG,
 } from '../lib/referralService';
@@ -114,8 +115,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         }
 
         // 1. Detect Referrer ID in exact priority order:
-        //    a) Telegram WebApp start_param (initDataUnsafe.start_param)
-        //    b) Fallback: query parameters (startapp / ref / start)
+        //    a) Telegram WebApp start_param (initDataUnsafe.start_param / initData)
+        //    b) Fallback: query & hash parameters (startapp / ref / start)
         const referrerId = detectReferrerOnLaunch(userId);
 
         // 2. Authenticate with server (which verifies Telegram initData & runs atomic referral transaction)
@@ -130,6 +131,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
                 authData.user?.referredBy ||
                 authData.user?.referrerId
             );
+            if (serverReferralApplied) {
+              clearPendingReferrer();
+            }
             setUser(authData.user);
             saveCachedUser(userId, authData.user);
             setLoading(false);
@@ -141,16 +145,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           );
         }
 
-        // 3. Only hit client-side Firestore transaction if server auth failed AND a new referral needs processing
-        if (!authSuccess && referrerId && !serverReferralApplied) {
+        // 3. Guarantee referral attribution: if a referrerId was detected and not yet applied, run referralService.processReferral
+        if (referrerId && !serverReferralApplied) {
           try {
-            await referralService.processReferral({
+            const refRes = await referralService.processReferral({
               currentUserId: userId,
               currentUserFirstName: firstName,
               currentUserLastName: lastName,
               currentUserUsername: username,
               rawReferrerParam: referrerId,
             });
+            if (refRes?.user) {
+              setUser(refRes.user);
+              saveCachedUser(userId, refRes.user);
+            }
           } catch (refErr) {
             console.warn('Client referral processing warning:', refErr);
           }

@@ -6,7 +6,6 @@ import {
   REFERRAL_MILESTONES,
   ReferralMilestone,
   ReferralRecord,
-  LeaderboardEntry,
   referralService,
   buildReferralLink,
   buildTelegramShareUrl,
@@ -18,11 +17,11 @@ import {
   Users,
   Zap,
   Share2,
-  Trophy,
   Crown,
   Gift,
   CheckCircle2,
   Lock,
+  RefreshCw,
 } from 'lucide-react';
 
 const LOGO_URL = 'https://i.suar.me/PpEzN/l';
@@ -50,18 +49,14 @@ const getInitials = (name?: string, username?: string) => {
 
 export default function Referral() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'milestones' | 'friends' | 'leaderboard'>('milestones');
+  const [activeTab, setActiveTab] = useState<'milestones' | 'friends'>('milestones');
   const [copiedLink, setCopiedLink] = useState(false);
 
   const [botUsername, setBotUsername] = useState(DEFAULT_BOT_USERNAME);
   const [appShortName, setAppShortName] = useState(DEFAULT_SHORT_NAME);
 
   const [referrals, setReferrals] = useState<ReferralRecord[]>([]);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [loadingFriends, setLoadingFriends] = useState(false);
-  const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
-  const [friendsLoaded, setFriendsLoaded] = useState(false);
-  const [leaderboardLoaded, setLeaderboardLoaded] = useState(false);
   const [claimingId, setClaimingId] = useState<string | null>(null);
 
   const userId = String(user?.id || '999999999');
@@ -76,55 +71,22 @@ export default function Referral() {
     });
   }, []);
 
-  // Lazy-load Friends list ONLY when user opens the 'friends' tab
-  useEffect(() => {
-    if (activeTab !== 'friends' || friendsLoaded) return;
-    let isMounted = true;
+  const loadFriendsList = async (force = false) => {
     setLoadingFriends(true);
+    try {
+      const myRefs = await referralService.getMyReferrals(userId, force);
+      setReferrals(myRefs);
+    } catch (e) {
+      console.error('Error loading referrals list:', e);
+    } finally {
+      setLoadingFriends(false);
+    }
+  };
 
-    referralService
-      .getMyReferrals(userId)
-      .then((myRefs) => {
-        if (!isMounted) return;
-        setReferrals(myRefs);
-        setFriendsLoaded(true);
-      })
-      .catch((e) => {
-        console.error('Error loading referrals list:', e);
-      })
-      .finally(() => {
-        if (isMounted) setLoadingFriends(false);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [activeTab, userId, friendsLoaded]);
-
-  // Lazy-load Leaderboard ONLY when user opens the 'leaderboard' tab
+  // Load user's referrals (uses 2-minute cache unless forced)
   useEffect(() => {
-    if (activeTab !== 'leaderboard' || leaderboardLoaded) return;
-    let isMounted = true;
-    setLoadingLeaderboard(true);
-
-    referralService
-      .getLeaderboard(userId, 10)
-      .then((topLeaders) => {
-        if (!isMounted) return;
-        setLeaderboard(topLeaders);
-        setLeaderboardLoaded(true);
-      })
-      .catch((e) => {
-        console.error('Error loading leaderboard:', e);
-      })
-      .finally(() => {
-        if (isMounted) setLoadingLeaderboard(false);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [activeTab, userId, leaderboardLoaded]);
+    loadFriendsList(false);
+  }, [userId]);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(referralLink);
@@ -292,11 +254,11 @@ export default function Referral() {
         </button>
       </div>
 
-      {/* Referral Hub Navigation Tabs */}
+      {/* Referral Hub Navigation Tabs (2 Tabs: Milestones & My Frens) */}
       <div className="mb-4 flex rounded-2xl bg-[#141419] p-1 border border-white/[0.06]">
         <button
           onClick={() => setActiveTab('milestones')}
-          className={`flex-1 flex items-center justify-center space-x-1.5 rounded-xl py-2.5 text-xs font-bold transition-all whitespace-nowrap ${
+          className={`flex-1 flex items-center justify-center space-x-2 rounded-xl py-2.5 text-xs font-bold transition-all whitespace-nowrap ${
             activeTab === 'milestones'
               ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-zinc-950 shadow-sm'
               : 'text-zinc-400 hover:text-white'
@@ -308,7 +270,7 @@ export default function Referral() {
 
         <button
           onClick={() => setActiveTab('friends')}
-          className={`flex-1 flex items-center justify-center space-x-1.5 rounded-xl py-2.5 text-xs font-bold transition-all whitespace-nowrap ${
+          className={`flex-1 flex items-center justify-center space-x-2 rounded-xl py-2.5 text-xs font-bold transition-all whitespace-nowrap ${
             activeTab === 'friends'
               ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-zinc-950 shadow-sm'
               : 'text-zinc-400 hover:text-white'
@@ -316,18 +278,6 @@ export default function Referral() {
         >
           <Users size={14} />
           <span>My Frens ({referralsCount})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('leaderboard')}
-          className={`flex-1 flex items-center justify-center space-x-1.5 rounded-xl py-2.5 text-xs font-bold transition-all whitespace-nowrap ${
-            activeTab === 'leaderboard'
-              ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-zinc-950 shadow-sm'
-              : 'text-zinc-400 hover:text-white'
-          }`}
-        >
-          <Trophy size={14} />
-          <span>Top Leaders</span>
         </button>
       </div>
 
@@ -459,9 +409,17 @@ export default function Referral() {
             <span className="font-display text-xs font-bold text-white">
               Direct Referral Ledger ({referrals.length})
             </span>
-            <span className="text-[11px] text-zinc-500">
-              Sorted by latest join
-            </span>
+            <button
+              onClick={() => loadFriendsList(true)}
+              disabled={loadingFriends}
+              className="flex items-center space-x-1.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] active:scale-95 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-300 transition-all"
+            >
+              <RefreshCw
+                size={12}
+                className={loadingFriends ? 'animate-spin text-amber-400' : 'text-zinc-400'}
+              />
+              <span>Refresh</span>
+            </button>
           </div>
 
           {loadingFriends ? (
@@ -519,93 +477,7 @@ export default function Referral() {
           )}
         </div>
       )}
-
-      {/* TAB 3: WEEKLY / TOP REFERRERS LEADERBOARD */}
-      {activeTab === 'leaderboard' && (
-        <div className="rounded-3xl bg-[#141419] p-4 border border-white/[0.06]">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <Trophy size={14} className="text-amber-400" />
-              <span className="font-display text-xs font-bold text-white">
-                Top Ambassadors Leaderboard
-              </span>
-            </div>
-            <span className="text-[11px] text-zinc-500">By Referrals</span>
-          </div>
-
-          {loadingLeaderboard ? (
-            <div className="py-6 text-center text-xs text-zinc-500">
-              Loading leaderboard...
-            </div>
-          ) : leaderboard.length === 0 ? (
-            <div className="rounded-2xl bg-[#0b0b0e]/70 p-5 text-center border border-white/[0.04]">
-              <p className="text-xs text-zinc-400">No leaderboard entries yet.</p>
-            </div>
-          ) : (
-            <div className="flex flex-col space-y-2">
-              {leaderboard.map((entry) => {
-                const fullName =
-                  `${entry.firstName} ${entry.lastName}`.trim() ||
-                  entry.username ||
-                  `Miner #${entry.id.slice(-4)}`;
-
-                return (
-                  <div
-                    key={entry.id}
-                    className={`flex items-center justify-between rounded-2xl px-3.5 py-2.5 border transition-all ${
-                      entry.isCurrentUser
-                        ? 'bg-amber-500/15 border-amber-500/40'
-                        : 'bg-[#0b0b0e]/70 border-white/[0.04]'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-3 min-w-0 pr-2">
-                      <span
-                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl font-mono text-xs font-extrabold ${
-                          entry.rank === 1
-                            ? 'bg-amber-400 text-zinc-950'
-                            : entry.rank === 2
-                            ? 'bg-zinc-300 text-zinc-950'
-                            : entry.rank === 3
-                            ? 'bg-amber-700 text-white'
-                            : 'bg-white/[0.06] text-zinc-400'
-                        }`}
-                      >
-                        #{entry.rank}
-                      </span>
-
-                      <div className="min-w-0">
-                        <div className="flex items-center space-x-1.5">
-                          <span className="text-xs font-bold text-white truncate">
-                            {fullName}
-                          </span>
-                          {entry.isCurrentUser && (
-                            <span className="text-[10px] font-bold text-amber-400">
-                              (You)
-                            </span>
-                          )}
-                        </div>
-                        <span className="block font-mono text-[10px] text-zinc-400 tabular-nums">
-                          {entry.referralsCount.toLocaleString()} Frens invited
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center space-x-1 font-mono text-xs font-bold tabular-nums text-amber-400 shrink-0">
-                      <img
-                        src={LOGO_URL}
-                        className="h-3.5 w-3.5 rounded-full object-contain"
-                        alt="KITTY"
-                        referrerPolicy="no-referrer"
-                      />
-                      <span>+{entry.earnedReferralCoins.toLocaleString()}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
+
