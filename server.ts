@@ -228,11 +228,18 @@ const extractReferrerId = (rawParam?: string | null): string | null => {
   if (!rawParam) return null;
   const cleaned = String(rawParam).trim();
   if (!cleaned) return null;
-  const withoutPrefix = cleaned.replace(/^(ref_|r_|ref-|invite_|startapp=)/i, '').trim();
+  const withoutPrefix = cleaned
+    .replace(
+      /^(ref_tg_|ref_tg-|ref_|r_|ref-|invite_|inviter_|tg_|u_|user_|startapp=|start=|ref=)+/i,
+      ''
+    )
+    .trim();
   if (/^\d+$/.test(withoutPrefix)) {
     return withoutPrefix;
   }
-  const match = withoutPrefix.match(/(?:ref_|r_|ref-|invite_)?(\d{5,20})/i);
+  const match = withoutPrefix.match(
+    /(?:ref_tg_|ref_tg-|ref_|r_|ref-|invite_|inviter_|tg_|u_|user_)?(\d{5,20})/i
+  );
   if (match && match[1]) {
     return match[1];
   }
@@ -250,31 +257,31 @@ const getValidExistingReferrer = (userData: any, currentUserId: string): string 
   return raw;
 };
 
-let cachedBotUsername: string | null = process.env.VITE_TELEGRAM_BOT_USERNAME || null;
+let cachedBotUsername: string = process.env.VITE_TELEGRAM_BOT_USERNAME || 'kittymedallion_bot';
+let cachedAppShortName: string = process.env.VITE_TELEGRAM_APP_SHORT_NAME || '';
 
-async function resolveBotUsername(): Promise<string> {
-  if (cachedBotUsername && cachedBotUsername !== 'KittyMedallion_bot') {
-    return cachedBotUsername;
-  }
+async function resolveBotInfo(): Promise<{ botUsername: string; appShortName: string }> {
   if (BOT_TOKEN && BOT_TOKEN !== 'test_token') {
     try {
       const resp = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`);
       const data = await resp.json();
       if (data?.ok && data?.result?.username) {
         cachedBotUsername = data.result.username;
-        return data.result.username;
+        return { botUsername: data.result.username, appShortName: cachedAppShortName };
       }
     } catch (e) {
       console.warn('Could not fetch bot username from Telegram getMe:', e);
     }
   }
-  return cachedBotUsername || 'KittyMedallion_bot';
+  return {
+    botUsername: cachedBotUsername || 'kittymedallion_bot',
+    appShortName: cachedAppShortName
+  };
 }
 
 app.get('/api/bot-info', async (_req, res) => {
-  const botUsername = await resolveBotUsername();
-  const appShortName = process.env.VITE_TELEGRAM_APP_SHORT_NAME || '';
-  res.json({ botUsername, appShortName });
+  const info = await resolveBotInfo();
+  res.json(info);
 });
 
 app.post('/api/telegram-webhook', async (req, res) => {

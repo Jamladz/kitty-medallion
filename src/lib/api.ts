@@ -350,25 +350,25 @@ export const api = {
     }
   },
 
-  getBotInfo: async () => {
-    if (clientBotInfoCache) return clientBotInfoCache;
+  getBotInfo: async (forceRefresh = false) => {
+    if (!forceRefresh && clientBotInfoCache) return clientBotInfoCache;
     try {
       const info = await fetchApi('/bot-info');
       if (info?.botUsername) {
         clientBotInfoCache = info;
+        return info;
       }
-      return info;
-    } catch {
-      return {
-        botUsername:
-          (typeof import.meta !== 'undefined' &&
-            (import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME) ||
-          'KittyMedallion_bot',
-        appShortName:
-          (typeof import.meta !== 'undefined' &&
-            (import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME) ||
-          ''
-      };
-    }
-  }
+    } catch {}
+
+    return {
+      botUsername:
+        (typeof import.meta !== 'undefined' &&
+          (import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME) ||
+        'kittymedallion_bot',
+      appShortName:
+        (typeof import.meta !== 'undefined' &&
+          (import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME) ||
+        '',
+    };
+  },
 };

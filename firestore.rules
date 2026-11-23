@@ -15,20 +15,20 @@ service cloud.firestore {
       return newList.size() <= 10 && (newList.size() == oldList.size() || newList.size() == oldList.size() + 1);
     }
 
-    // Helper: Allow setting referredBy if the user entered before without a referral link (null or empty string)
+    // Helper: Allow setting referredBy / referrerId if the user entered before without a referral link (null, empty, or "999999999")
     function isReferredByValidTransition() {
       let oldRef = (resource != null && 'referredBy' in resource.data) ? resource.data.referredBy : null;
       let newRef = ('referredBy' in request.resource.data) ? request.resource.data.referredBy : null;
-      return oldRef == null || oldRef == '' || newRef == oldRef;
+      return oldRef == null || oldRef == '' || oldRef == '999999999' || newRef == oldRef;
     }
 
     match /users/{userId} {
       allow read: if true;
       allow create: if true;
-      allow update: if isBoundedIncrement('referralsCount', 50)
-                    && isBoundedIncrement('referralCount', 50)
-                    && isBoundedIncrement('earnedReferralCoins', 25000)
-                    && isBoundedIncrement('balanceKitty', 50000)
+      allow update: if isBoundedIncrement('referralsCount', 100)
+                    && isBoundedIncrement('referralCount', 100)
+                    && isBoundedIncrement('earnedReferralCoins', 50000)
+                    && isBoundedIncrement('balanceKitty', 100000)
                     && isBoundedIncrement('balanceUsdt', 100)
                     && isValidMilestoneUpdate()
                     && isReferredByValidTransition();

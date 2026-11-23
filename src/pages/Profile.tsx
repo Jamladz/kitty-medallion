@@ -146,7 +146,7 @@ export default function Profile() {
   const [botUsername, setBotUsername] = useState(
     (typeof import.meta !== 'undefined' &&
       (import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME) ||
-      'KittyMedallion_bot'
+      'kittymedallion_bot'
   );
   const [appShortName, setAppShortName] = useState(
     (typeof import.meta !== 'undefined' &&
@@ -161,9 +161,13 @@ export default function Profile() {
     });
   }, []);
 
-  const referralLink = appShortName
-    ? `https://t.me/${botUsername}/${appShortName}?startapp=ref_${user?.id}`
-    : `https://t.me/${botUsername}?startapp=ref_${user?.id}`;
+  const referralLink = React.useMemo(() => {
+    const uid = String(user?.id || '999999999');
+    const cleanBot = (botUsername || 'kittymedallion_bot').replace(/^@/, '').trim();
+    return appShortName
+      ? `https://t.me/${cleanBot}/${appShortName}?startapp=ref_tg_${uid}`
+      : `https://t.me/${cleanBot}?startapp=ref_tg_${uid}`;
+  }, [botUsername, appShortName, user?.id]);
 
   const handleCopyId = () => {
     if (!user?.id) return;
@@ -458,7 +462,7 @@ export default function Profile() {
               Personal Invite Link
             </span>
             <span className="block text-[11px] font-mono text-zinc-400 truncate">
-              t.me/{botUsername}?startapp=ref_{user?.id}
+              {referralLink.replace(/^https?:\/\//, '')}
             </span>
           </div>
         </div>

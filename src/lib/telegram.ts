@@ -1,6 +1,8 @@
 import { TelegramWebAppUser } from '../types';
 import { REFERRAL_CONFIG } from './rewardsEngine';
 
+export const OFFICIAL_BOT_USERNAME = 'kittymedallion_bot';
+
 // Capture initial launch search & hash parameters immediately at module load time
 // BEFORE React Router alters window.location.hash or search.
 const INITIAL_LAUNCH_SEARCH =
@@ -37,7 +39,7 @@ export function sanitizeReferrerId(
     const cleaned = input
       .trim()
       .replace(
-        /^(ref_|r_|ref-|invite_|inviter_|u_|user_|startapp=|start=|ref=)/i,
+        /^(ref_tg_|ref_tg-|ref_|r_|ref-|invite_|inviter_|tg_|u_|user_|startapp=|start=|ref=)+/i,
         ''
       )
       .trim();
@@ -46,7 +48,7 @@ export function sanitizeReferrerId(
       return cleaned;
     }
     const match = cleaned.match(
-      /(?:ref_|r_|ref-|invite_|inviter_|u_|user_)?(\d{5,20})/i
+      /(?:ref_tg_|ref_tg-|ref_|r_|ref-|invite_|inviter_|tg_|u_|user_)?(\d{5,20})/i
     );
     if (match && match[1]) {
       return match[1];
@@ -56,7 +58,7 @@ export function sanitizeReferrerId(
 
   let candidate = tryExtractNumericId(decoded);
 
-  // Also check if start_param was base64 encoded (e.g., cmVmXzEzNjg4OTk4NDI=)
+  // Also check if start_param was base64 encoded (e.g., cmVmX3RnXzEzNjg4OTk4NDI=)
   if (!candidate && typeof atob === 'function') {
     try {
       const b64Normalized = decoded.replace(/-/g, '+').replace(/_/g, '/');
@@ -278,15 +280,16 @@ export function getEffectiveTelegramUser(): TelegramWebAppUser {
       }
     } catch {}
 
-    // Browser preview support: generate distinct visitor ID if testing ref_999999999
+    // Browser preview support: generate distinct visitor ID if testing any referral link in browser
     try {
       const search = new URLSearchParams(window.location.search);
-      const hasReferralParam = Boolean(
+      const rawRef =
         search.get('startapp') ||
-          search.get('ref') ||
-          search.get('start') ||
-          search.get('tgWebAppStartParam')
-      );
+        search.get('ref') ||
+        search.get('start') ||
+        search.get('tgWebAppStartParam') ||
+        '';
+      const cleanedRef = sanitizeReferrerId(rawRef);
       const storedVisitorId = sessionStorage.getItem('kitty_browser_visitor_id');
       if (storedVisitorId) {
         return {
@@ -296,26 +299,17 @@ export function getEffectiveTelegramUser(): TelegramWebAppUser {
           username: `fren_${storedVisitorId.slice(-4)}`,
         };
       }
-      if (hasReferralParam) {
-        const rawRef =
-          search.get('startapp') ||
-          search.get('ref') ||
-          search.get('start') ||
-          search.get('tgWebAppStartParam') ||
-          '';
-        const cleanedRef = sanitizeReferrerId(rawRef);
-        if (cleanedRef === '999999999') {
-          const generatedId = String(
-            Math.floor(100000000 + Math.random() * 800000000)
-          );
-          sessionStorage.setItem('kitty_browser_visitor_id', generatedId);
-          return {
-            id: generatedId,
-            first_name: 'Invited',
-            last_name: `Fren #${generatedId.slice(-4)}`,
-            username: `fren_${generatedId.slice(-4)}`,
-          };
-        }
+      if (cleanedRef) {
+        const generatedId = String(
+          Math.floor(100000000 + Math.random() * 800000000)
+        );
+        sessionStorage.setItem('kitty_browser_visitor_id', generatedId);
+        return {
+          id: generatedId,
+          first_name: 'Invited',
+          last_name: `Fren #${generatedId.slice(-4)}`,
+          username: `fren_${generatedId.slice(-4)}`,
+        };
       }
     } catch {}
   }
@@ -329,20 +323,24 @@ export function getEffectiveTelegramUser(): TelegramWebAppUser {
 }
 
 /**
- * Generates the user's unique Telegram Mini App referral invite link:
- * https://t.me/<bot_username>?startapp=ref_<userId>
+ * Generates the user's unique Telegram Mini App referral invite link by Telegram ID:
+ * https://t.me/kittymedallion_bot?startapp=ref_tg_<userId>
  */
 export function buildReferralLink(
   userId: string,
-  botUsername = 'KittyMedallion_bot',
+  botUsername = OFFICIAL_BOT_USERNAME,
   appShortName = ''
 ): string {
-  const cleanBot = botUsername.replace(/^@/, '').trim() || 'KittyMedallion_bot';
-  const cleanShort = appShortName.replace(/^\/+|\/+$/g, '').trim();
+  const cleanUserId = String(userId || '').trim();
+  const cleanBot =
+    (botUsername || OFFICIAL_BOT_USERNAME).replace(/^@/, '').trim() ||
+    OFFICIAL_BOT_USERNAME;
+  const cleanShort = (appShortName || '').replace(/^\/+|\/+$/g, '').trim();
+
   if (cleanShort) {
-    return `https://t.me/${cleanBot}/${cleanShort}?startapp=ref_${userId}`;
+    return `https://t.me/${cleanBot}/${cleanShort}?startapp=ref_tg_${cleanUserId}`;
   }
-  return `https://t.me/${cleanBot}?startapp=ref_${userId}`;
+  return `https://t.me/${cleanBot}?startapp=ref_tg_${cleanUserId}`;
 }
 
 /**

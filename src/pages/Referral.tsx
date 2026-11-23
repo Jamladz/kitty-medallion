@@ -9,6 +9,7 @@ import {
   calculateTotalReferralStats,
 } from '../lib/rewardsEngine';
 import {
+  OFFICIAL_BOT_USERNAME,
   buildReferralLink,
   buildTelegramShareUrl,
 } from '../lib/telegram';
@@ -31,7 +32,7 @@ const LOGO_URL = 'https://i.suar.me/PpEzN/l';
 const DEFAULT_BOT_USERNAME =
   (typeof import.meta !== 'undefined' &&
     (import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME) ||
-  'KittyMedallion_bot';
+  OFFICIAL_BOT_USERNAME;
 const DEFAULT_SHORT_NAME =
   (typeof import.meta !== 'undefined' &&
     (import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME) ||
@@ -64,7 +65,7 @@ export default function Referral() {
 
   const userId = String(user?.id || '999999999');
 
-  // 1) Unique Invite Link: https://t.me/<bot_username>?startapp=ref_<userId>
+  // Unique Invite Link by Telegram ID: https://t.me/kittymedallion_bot?startapp=ref_<userId>
   const referralLink = buildReferralLink(userId, botUsername, appShortName);
 
   useEffect(() => {
@@ -86,7 +87,6 @@ export default function Referral() {
     }
   };
 
-  // Load user's referrals from backend server ledger (0 Firestore reads)
   useEffect(() => {
     loadFriendsList(true);
   }, [userId, activeTab]);
@@ -98,7 +98,6 @@ export default function Referral() {
     window.Telegram?.WebApp?.showAlert?.('Referral link copied to clipboard!');
   };
 
-  // Ready-to-share Telegram button via https://t.me/share/url?url=...&text=...
   const handleShareTelegram = () => {
     const shareUrl = buildTelegramShareUrl(referralLink);
     if (window.Telegram?.WebApp?.openTelegramLink) {
@@ -222,7 +221,7 @@ export default function Referral() {
         <div className="flex items-center justify-between rounded-2xl bg-[#0b0b0e] px-3.5 py-2.5 border border-white/[0.05]">
           <div className="min-w-0 pr-2">
             <span className="block text-[10px] font-medium text-zinc-500">
-              Personal Invite Link
+              Unique Telegram ID Referral Link
             </span>
             <span className="block font-mono text-xs text-zinc-200 truncate mt-0.5">
               {referralLink}
@@ -476,4 +475,3 @@ export default function Referral() {
     </div>
   );
 }
-
