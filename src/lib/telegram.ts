@@ -7,9 +7,17 @@ const HOME_SCREEN_ADDED_STORAGE_KEY = 'kitty_tg_homescreen_added_v1';
 // Capture initial launch search & hash parameters immediately at module load time
 // BEFORE React Router alters window.location.hash or search.
 const INITIAL_LAUNCH_SEARCH =
-  typeof window !== 'undefined' ? window.location.search : '';
+  typeof window !== 'undefined'
+    ? (window as any).__INITIAL_LAUNCH_SEARCH__ || window.location.search || ''
+    : '';
 const INITIAL_LAUNCH_HASH =
-  typeof window !== 'undefined' ? window.location.hash : '';
+  typeof window !== 'undefined'
+    ? (window as any).__INITIAL_LAUNCH_HASH__ || window.location.hash || ''
+    : '';
+const INITIAL_LAUNCH_HREF =
+  typeof window !== 'undefined'
+    ? (window as any).__INITIAL_LAUNCH_HREF__ || window.location.href || ''
+    : '';
 
 /**
  * Syncs Telegram Bot API 8.0+ safeAreaInset & contentSafeAreaInset to root CSS variables
@@ -244,8 +252,70 @@ export function checkOfficialTelegramHomeScreenStatus(): Promise<HomeScreenStatu
 }
 
 /**
+ * Verifies that a user ID belongs to a real Telegram account (numeric 5..20 digits)
+ * and is never the mock browser preview account ('999999999') or a test ID.
+ */
+export function isRealTelegramUserId(id?: string | null): boolean {
+  if (!id) return false;
+  const clean = String(id).trim();
+  if (!clean || clean === '999999999' || clean === '0') return false;
+  if (clean.startsWith('test_')) return false;
+  return /^\d{5,20}$/.test(clean);
+}
+
+/**
+ * Formats a Telegram user's display name professionally like native Telegram Mini Apps.
+ * Strips artificial legacy "User" last names so single-name Telegram users display cleanly.
+ */
+export function formatTelegramDisplayName(
+  firstName?: string | null,
+  lastName?: string | null,
+  username?: string | null,
+  fallbackId?: string | null
+): string {
+  const cleanFirst = String(firstName || '').trim();
+  const rawLast = String(lastName || '').trim();
+  const cleanLast =
+    rawLast.toLowerCase() === 'user' &&
+    cleanFirst.toLowerCase() !== 'developer'
+      ? ''
+      : rawLast;
+
+  const full = `${cleanFirst} ${cleanLast}`
+    .replace(/\s+User$/i, '')
+    .trim();
+
+  if (
+    full &&
+    full.toLowerCase() !== 'miner' &&
+    full.toLowerCase() !== 'telegram friend' &&
+    full.toLowerCase() !== 'developer user' &&
+    full.toLowerCase() !== 'developer'
+  ) {
+    return full;
+  }
+
+  const cleanUsername = String(username || '')
+    .trim()
+    .replace(/^@/, '');
+  if (cleanUsername && cleanUsername !== 'dev_user') {
+    return cleanUsername;
+  }
+
+  if (cleanFirst && cleanFirst.toLowerCase() !== 'developer') {
+    return cleanFirst;
+  }
+
+  if (fallbackId && isRealTelegramUserId(fallbackId)) {
+    return `Telegram User #${String(fallbackId).slice(-4)}`;
+  }
+
+  return 'Telegram User';
+}
+
+/**
  * Cleans the "ref_tg_" / "ref_" prefix (including URL-encoded or Base64-encoded start_param values)
- * and validates that the referrerId is a valid numeric Telegram ID
+ * and validates that the referrerId is a real numeric Telegram ID
  * and not equal to currentUserId (prevents self-referral).
  */
 export function sanitizeReferrerId(
@@ -302,7 +372,7 @@ export function sanitizeReferrerId(
     } catch {}
   }
 
-  if (!candidate) return null;
+  if (!candidate || !isRealTelegramUserId(candidate)) return null;
   if (currentUserId && candidate === String(currentUserId)) {
     return null; // Ignore self-referral
   }
@@ -375,49 +445,97 @@ function extractReferrerFromUrlStrings(
   return null;
 }
 
-// Immediately persist any referrer detected & initialize Telegram Fullscreen at bundle load time
-if (typeof window !== 'undefined') {
-  const earlyRef =
-    sanitizeReferrerId(window.Telegram?.WebApp?.initDataUnsafe?.start_param) ||
-    extractReferrerFromUrlStrings(INITIAL_LAUNCH_SEARCH, INITIAL_LAUNCH_HASH);
-  if (earlyRef) {
-    persistDetectedReferrer(earlyRef);
-  }
-  initTelegramFullscreen();
-}
-
-/**
- * Reads the referrer ID on app launch in exact priority order:
- * 1) Telegram WebApp start_param (initDataUnsafe.start_param or raw initData)
- * 2) Fallback: Page URL query & hash parameters (startapp / ref / start / tgWebAppStartParam)
- * 3) Persisted pending referrer from session/localStorage
- */
-export function detectReferrerOnLaunch(currentUserId?: string): string | null {
+function extractReferrerFromTelegramInternals(
+  currentUserId?: string
+): string | null {
   if (typeof window === 'undefined') return null;
 
-  // Priority A1: Telegram WebApp initDataUnsafe.start_param
+  // 1. Official Telegram.WebApp.initDataUnsafe.start_param
   const tgStartParam = window.Telegram?.WebApp?.initDataUnsafe?.start_param;
-  const fromTelegram = sanitizeReferrerId(tgStartParam, currentUserId);
-  if (fromTelegram) {
-    persistDetectedReferrer(fromTelegram);
-    return fromTelegram;
-  }
+  const fromUnsafe = sanitizeReferrerId(tgStartParam, currentUserId);
+  if (fromUnsafe) return fromUnsafe;
 
-  // Priority A2: Telegram WebApp raw initData string start_param
+  // 2. Official Telegram.WebApp.initData query string
   try {
     const rawInitData = window.Telegram?.WebApp?.initData;
     if (rawInitData) {
       const initParams = new URLSearchParams(rawInitData);
       const fromRawInit = sanitizeReferrerId(
-        initParams.get('start_param'),
+        initParams.get('start_param') || initParams.get('tgWebAppStartParam'),
         currentUserId
       );
-      if (fromRawInit) {
-        persistDetectedReferrer(fromRawInit);
-        return fromRawInit;
+      if (fromRawInit) return fromRawInit;
+    }
+  } catch {}
+
+  // 3. Telegram.WebView.initParams (populated directly by telegram-web-app.js)
+  try {
+    const webViewParams = (window as any).Telegram?.WebView?.initParams;
+    if (webViewParams && typeof webViewParams === 'object') {
+      const fromWvStart = sanitizeReferrerId(
+        webViewParams.tgWebAppStartParam || webViewParams.start_param,
+        currentUserId
+      );
+      if (fromWvStart) return fromWvStart;
+
+      if (webViewParams.tgWebAppData) {
+        const wvDataParams = new URLSearchParams(
+          String(webViewParams.tgWebAppData)
+        );
+        const fromWvData = sanitizeReferrerId(
+          wvDataParams.get('start_param') ||
+            wvDataParams.get('tgWebAppStartParam'),
+          currentUserId
+        );
+        if (fromWvData) return fromWvData;
       }
     }
   } catch {}
+
+  // 4. sessionStorage['__telegram__initParams'] (stored by telegram-web-app.js before hash changes)
+  try {
+    const rawStored =
+      sessionStorage.getItem('__telegram__initParams') ||
+      sessionStorage.getItem('initParams');
+    if (rawStored) {
+      const parsed = JSON.parse(rawStored);
+      if (parsed && typeof parsed === 'object') {
+        const fromStoredStart = sanitizeReferrerId(
+          parsed.tgWebAppStartParam || parsed.start_param,
+          currentUserId
+        );
+        if (fromStoredStart) return fromStoredStart;
+
+        if (parsed.tgWebAppData) {
+          const inner = new URLSearchParams(String(parsed.tgWebAppData));
+          const fromInner = sanitizeReferrerId(
+            inner.get('start_param') || inner.get('tgWebAppStartParam'),
+            currentUserId
+          );
+          if (fromInner) return fromInner;
+        }
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+/**
+ * Reads the referrer ID on app launch in exact priority order:
+ * 1) Telegram WebApp / WebView start_param (initDataUnsafe, initData, WebView.initParams, __telegram__initParams)
+ * 2) Page URL query & hash parameters (live URL, initial pre-router URL, and performance navigation URL)
+ * 3) Persisted pending referrer from session/localStorage
+ */
+export function detectReferrerOnLaunch(currentUserId?: string): string | null {
+  if (typeof window === 'undefined') return null;
+
+  // Priority A: Telegram WebApp & WebView internals
+  const fromTelegram = extractReferrerFromTelegramInternals(currentUserId);
+  if (fromTelegram) {
+    persistDetectedReferrer(fromTelegram);
+    return fromTelegram;
+  }
 
   // Priority B1: Live window.location.search & window.location.hash
   const fromLiveUrl = extractReferrerFromUrlStrings(
@@ -430,7 +548,7 @@ export function detectReferrerOnLaunch(currentUserId?: string): string | null {
     return fromLiveUrl;
   }
 
-  // Priority B2: Initial launch search & hash captured before router mount
+  // Priority B2: Initial launch search & hash captured in index.html before telegram-web-app.js / router
   const fromInitialUrl = extractReferrerFromUrlStrings(
     INITIAL_LAUNCH_SEARCH,
     INITIAL_LAUNCH_HASH,
@@ -441,22 +559,55 @@ export function detectReferrerOnLaunch(currentUserId?: string): string | null {
     return fromInitialUrl;
   }
 
-  // Priority C: Persisted pending referrer
+  // Priority B3: Full initial href or PerformanceNavigationTiming entry
   try {
-    const cached =
-      sessionStorage.getItem('kitty_detected_referrer') ||
-      localStorage.getItem('kitty_pending_referrer');
-    if (cached) {
-      return sanitizeReferrerId(cached, currentUserId);
+    const navEntries = window.performance?.getEntriesByType?.('navigation') as
+      | PerformanceNavigationTiming[]
+      | undefined;
+    const candidateHrefs = [
+      INITIAL_LAUNCH_HREF,
+      navEntries && navEntries[0] ? navEntries[0].name : '',
+    ];
+    for (const href of candidateHrefs) {
+      if (!href) continue;
+      const parsedUrl = new URL(href, window.location.origin);
+      const fromHref = extractReferrerFromUrlStrings(
+        parsedUrl.search,
+        parsedUrl.hash,
+        currentUserId
+      );
+      if (fromHref) {
+        persistDetectedReferrer(fromHref);
+        return fromHref;
+      }
     }
+  } catch {}
+
+  // Priority C: Persisted pending referrer (check session and local independently so self-ID in one never blocks the other)
+  try {
+    const fromSession = sanitizeReferrerId(
+      sessionStorage.getItem('kitty_detected_referrer'),
+      currentUserId
+    );
+    if (fromSession) return fromSession;
+
+    const fromLocal = sanitizeReferrerId(
+      localStorage.getItem('kitty_pending_referrer'),
+      currentUserId
+    );
+    if (fromLocal) return fromLocal;
   } catch {}
 
   return null;
 }
 
 export function getTelegramInitData(): string {
-  if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
-    return window.Telegram.WebApp.initData || '';
+  if (typeof window !== 'undefined') {
+    if (window.Telegram?.WebApp?.initData) {
+      return window.Telegram.WebApp.initData;
+    }
+    const wvData = (window as any).Telegram?.WebView?.initParams?.tgWebAppData;
+    if (wvData) return String(wvData);
   }
   return '';
 }
@@ -465,85 +616,105 @@ export function getEffectiveTelegramUser(): TelegramWebAppUser {
   if (typeof window !== 'undefined') {
     const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
     if (tgUser && tgUser.id) {
-      return {
+      const resolved: TelegramWebAppUser = {
         id: String(tgUser.id),
         first_name: tgUser.first_name || 'Miner',
         last_name: tgUser.last_name || '',
         username: tgUser.username || '',
         photo_url: tgUser.photo_url,
       };
+      try {
+        sessionStorage.setItem(
+          'kitty_real_tg_user_session',
+          JSON.stringify(resolved)
+        );
+      } catch {}
+      return resolved;
     }
 
-    const rawInit = window.Telegram?.WebApp?.initData;
-    if (rawInit) {
+    const rawInitCandidates = [
+      window.Telegram?.WebApp?.initData,
+      (window as any).Telegram?.WebView?.initParams?.tgWebAppData,
+    ];
+    try {
+      const rawStored = sessionStorage.getItem('__telegram__initParams');
+      if (rawStored) {
+        const parsedStored = JSON.parse(rawStored);
+        if (parsedStored?.tgWebAppData) {
+          rawInitCandidates.push(String(parsedStored.tgWebAppData));
+        }
+      }
+    } catch {}
+
+    for (const rawInit of rawInitCandidates) {
+      if (!rawInit) continue;
       try {
-        const userJson = new URLSearchParams(rawInit).get('user');
+        const userJson = new URLSearchParams(String(rawInit)).get('user');
         if (userJson) {
           const parsed = JSON.parse(userJson);
           if (parsed && parsed.id) {
-            return {
+            const resolved: TelegramWebAppUser = {
               id: String(parsed.id),
               first_name: parsed.first_name || 'Miner',
               last_name: parsed.last_name || '',
               username: parsed.username || '',
               photo_url: parsed.photo_url,
             };
+            try {
+              sessionStorage.setItem(
+                'kitty_real_tg_user_session',
+                JSON.stringify(resolved)
+              );
+            } catch {}
+            return resolved;
           }
         }
       } catch {}
     }
 
     try {
-      const hashStr = window.location.hash.replace(/^#/, '');
-      const hashParams = new URLSearchParams(hashStr);
-      const tgWebAppData = hashParams.get('tgWebAppData');
-      if (tgWebAppData) {
-        const userJson = new URLSearchParams(tgWebAppData).get('user');
-        if (userJson) {
-          const parsed = JSON.parse(userJson);
-          if (parsed && parsed.id) {
-            return {
-              id: String(parsed.id),
-              first_name: parsed.first_name || 'Miner',
-              last_name: parsed.last_name || '',
-              username: parsed.username || '',
-              photo_url: parsed.photo_url,
-            };
+      const hashCandidates = [window.location.hash, INITIAL_LAUNCH_HASH];
+      for (const h of hashCandidates) {
+        if (!h) continue;
+        const hashStr = h.replace(/^#/, '');
+        const hashParams = new URLSearchParams(hashStr);
+        const tgWebAppData = hashParams.get('tgWebAppData');
+        if (tgWebAppData) {
+          const userJson = new URLSearchParams(tgWebAppData).get('user');
+          if (userJson) {
+            const parsed = JSON.parse(userJson);
+            if (parsed && parsed.id) {
+              const resolved: TelegramWebAppUser = {
+                id: String(parsed.id),
+                first_name: parsed.first_name || 'Miner',
+                last_name: parsed.last_name || '',
+                username: parsed.username || '',
+                photo_url: parsed.photo_url,
+              };
+              try {
+                sessionStorage.setItem(
+                  'kitty_real_tg_user_session',
+                  JSON.stringify(resolved)
+                );
+              } catch {}
+              return resolved;
+            }
           }
         }
       }
     } catch {}
 
-    // Browser preview support: generate distinct visitor ID if testing any referral link in browser
+    // Check if we already captured the real Telegram user earlier in this WebView session
     try {
-      const search = new URLSearchParams(window.location.search);
-      const rawRef =
-        search.get('startapp') ||
-        search.get('ref') ||
-        search.get('start') ||
-        search.get('tgWebAppStartParam') ||
-        '';
-      const cleanedRef = sanitizeReferrerId(rawRef);
-      const storedVisitorId = sessionStorage.getItem('kitty_browser_visitor_id');
-      if (storedVisitorId) {
-        return {
-          id: storedVisitorId,
-          first_name: 'Invited',
-          last_name: `Fren #${storedVisitorId.slice(-4)}`,
-          username: `fren_${storedVisitorId.slice(-4)}`,
-        };
-      }
-      if (cleanedRef) {
-        const generatedId = String(
-          Math.floor(100000000 + Math.random() * 800000000)
-        );
-        sessionStorage.setItem('kitty_browser_visitor_id', generatedId);
-        return {
-          id: generatedId,
-          first_name: 'Invited',
-          last_name: `Fren #${generatedId.slice(-4)}`,
-          username: `fren_${generatedId.slice(-4)}`,
-        };
+      sessionStorage.removeItem('kitty_browser_visitor_id');
+      const sessionUserRaw = sessionStorage.getItem(
+        'kitty_real_tg_user_session'
+      );
+      if (sessionUserRaw) {
+        const parsed = JSON.parse(sessionUserRaw);
+        if (parsed && parsed.id && isRealTelegramUserId(String(parsed.id))) {
+          return parsed;
+        }
       }
     } catch {}
   }
@@ -556,25 +727,33 @@ export function getEffectiveTelegramUser(): TelegramWebAppUser {
   };
 }
 
+// Immediately persist any referrer detected & initialize Telegram Fullscreen at bundle load time
+if (typeof window !== 'undefined') {
+  const currentUid = getEffectiveTelegramUser()?.id;
+  const earlyRef =
+    extractReferrerFromTelegramInternals(currentUid) ||
+    extractReferrerFromUrlStrings(
+      INITIAL_LAUNCH_SEARCH,
+      INITIAL_LAUNCH_HASH,
+      currentUid
+    );
+  if (earlyRef) {
+    persistDetectedReferrer(earlyRef);
+  }
+  initTelegramFullscreen();
+}
+
 /**
  * Generates the user's unique Telegram Mini App referral invite link by Telegram ID:
  * https://t.me/kittymedallion_bot?startapp=ref_tg_<userId>
  */
 export function buildReferralLink(
   userId: string,
-  botUsername = OFFICIAL_BOT_USERNAME,
-  appShortName = ''
+  _botUsername = OFFICIAL_BOT_USERNAME,
+  _appShortName = ''
 ): string {
   const cleanUserId = String(userId || '').trim();
-  const cleanBot =
-    (botUsername || OFFICIAL_BOT_USERNAME).replace(/^@/, '').trim() ||
-    OFFICIAL_BOT_USERNAME;
-  const cleanShort = (appShortName || '').replace(/^\/+|\/+$/g, '').trim();
-
-  if (cleanShort) {
-    return `https://t.me/${cleanBot}/${cleanShort}?startapp=ref_tg_${cleanUserId}`;
-  }
-  return `https://t.me/${cleanBot}?startapp=ref_tg_${cleanUserId}`;
+  return `https://t.me/${OFFICIAL_BOT_USERNAME}?startapp=ref_tg_${cleanUserId}`;
 }
 
 /**

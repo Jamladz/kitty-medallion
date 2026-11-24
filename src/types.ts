@@ -74,6 +74,7 @@ export interface KittyUser {
   firstName: string;
   lastName: string;
   username: string;
+  photoUrl?: string;
   balanceKitty: number;
   balanceUsdt: number;
   welcomeUsdtGranted?: boolean;
@@ -106,7 +107,10 @@ export interface ReferralRecord {
   referrerId: string;
   referredId: string;
   referredName: string;
+  referredFirstName?: string;
+  referredLastName?: string;
   referredUsername?: string;
+  referredPhotoUrl?: string;
   rewardAmount: number;
   welcomeBonus: number;
   welcomeBonusUsdt?: number;
@@ -127,6 +131,7 @@ export interface ProcessReferralParams {
   currentUserFirstName: string;
   currentUserLastName?: string;
   currentUserUsername?: string;
+  currentUserPhotoUrl?: string;
   rawReferrerParam?: string | null;
 }
 

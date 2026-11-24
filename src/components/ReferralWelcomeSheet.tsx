@@ -32,6 +32,11 @@ export const ReferralWelcomeSheet: React.FC = () => {
         window.localStorage.setItem(storageKey, '1');
       } catch {}
     }
+    if (userId) {
+      try {
+        window.sessionStorage.removeItem(`kitty_show_welcome_sheet_${userId}`);
+      } catch {}
+    }
     setVisible(false);
     setTimeout(() => {
       setMounted(false);
@@ -41,12 +46,6 @@ export const ReferralWelcomeSheet: React.FC = () => {
 
   useEffect(() => {
     const handleGiftUnlocked = () => {
-      if (storageKey) {
-        try {
-          const alreadyClaimed = window.localStorage.getItem(storageKey);
-          if (alreadyClaimed === '1') return;
-        } catch {}
-      }
       openSheet();
     };
 
@@ -58,11 +57,15 @@ export const ReferralWelcomeSheet: React.FC = () => {
 
   useEffect(() => {
     if (!user || !userId) return;
-    if (!hasValidReferrer(user, userId)) return;
+    const forceShow =
+      typeof window !== 'undefined' &&
+      window.sessionStorage.getItem(`kitty_show_welcome_sheet_${userId}`) === '1';
+
+    if (!forceShow && !hasValidReferrer(user, userId)) return;
 
     try {
       const alreadyClaimed = window.localStorage.getItem(storageKey);
-      if (alreadyClaimed !== '1') {
+      if (forceShow || alreadyClaimed !== '1') {
         openSheet();
       }
     } catch {}

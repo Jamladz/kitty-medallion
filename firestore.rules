@@ -15,11 +15,10 @@ service cloud.firestore {
       return newList.size() <= 10 && (newList.size() == oldList.size() || newList.size() == oldList.size() + 1);
     }
 
-    // Helper: Allow setting referredBy / referrerId if the user entered before without a referral link (null, empty, or "999999999")
-    function isReferredByValidTransition() {
-      let oldRef = (resource != null && 'referredBy' in resource.data) ? resource.data.referredBy : null;
+    // Helper: Allow setting referredBy / referrerId on existing or new users while preventing self-referral
+    function isReferredByValidTransition(userId) {
       let newRef = ('referredBy' in request.resource.data) ? request.resource.data.referredBy : null;
-      return oldRef == null || oldRef == '' || oldRef == '999999999' || newRef == oldRef;
+      return newRef == null || (newRef is string && newRef != userId);
     }
 
     match /users/{userId} {
@@ -31,7 +30,8 @@ service cloud.firestore {
                     && isBoundedIncrement('balanceKitty', 100000)
                     && isBoundedIncrement('balanceUsdt', 100)
                     && isValidMilestoneUpdate()
-                    && isReferredByValidTransition();
+                    && isReferredByValidTransition(userId);
+      allow delete: if false;
     }
 
     match /referrals/{referralId} {

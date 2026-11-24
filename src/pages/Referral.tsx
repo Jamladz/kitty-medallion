@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../components/AuthProvider';
-import { api } from '../lib/api';
+import { db } from '../lib/firebase';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { ReferralMilestone, ReferralRecord } from '../types';
 import {
   REFERRAL_CONFIG,
@@ -12,6 +13,8 @@ import {
   OFFICIAL_BOT_USERNAME,
   buildReferralLink,
   buildTelegramShareUrl,
+  formatTelegramDisplayName,
+  isRealTelegramUserId,
 } from '../lib/telegram';
 import { referralService } from '../lib/referrals';
 import {
@@ -26,17 +29,23 @@ import {
   CheckCircle2,
   Lock,
   RefreshCw,
+  BadgeCheck,
 } from 'lucide-react';
 
 const LOGO_URL = 'https://i.ibb.co/3ykKfM0F/file-00000000e9e88246928f3f50b525d0a7.png';
-const DEFAULT_BOT_USERNAME =
-  (typeof import.meta !== 'undefined' &&
-    (import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME) ||
-  OFFICIAL_BOT_USERNAME;
-const DEFAULT_SHORT_NAME =
-  (typeof import.meta !== 'undefined' &&
-    (import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME) ||
-  '';
+
+const AVATAR_GRADIENTS = [
+  'from-amber-500 to-orange-600',
+  'from-sky-500 to-blue-600',
+  'from-emerald-500 to-teal-600',
+  'from-violet-500 to-purple-600',
+  'from-rose-500 to-pink-600',
+];
+
+const getAvatarGradient = (id?: string) => {
+  const num = Number(String(id || '0').slice(-3)) || 0;
+  return AVATAR_GRADIENTS[num % AVATAR_GRADIENTS.length];
+};
 
 const getInitials = (name?: string, username?: string) => {
   const clean = (name || '').trim();
@@ -47,17 +56,14 @@ const getInitials = (name?: string, username?: string) => {
     }
     return clean.slice(0, 2).toUpperCase();
   }
-  if (username) return username.slice(0, 2).toUpperCase();
-  return 'FR';
+  if (username) return username.replace(/^@/, '').slice(0, 2).toUpperCase();
+  return 'TG';
 };
 
 export default function Referral() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'milestones' | 'friends'>('milestones');
+  const [activeTab, setActiveTab] = useState<'milestones' | 'friends'>('friends');
   const [copiedLink, setCopiedLink] = useState(false);
-
-  const [botUsername, setBotUsername] = useState(DEFAULT_BOT_USERNAME);
-  const [appShortName, setAppShortName] = useState(DEFAULT_SHORT_NAME);
 
   const [referrals, setReferrals] = useState<ReferralRecord[]>([]);
   const [loadingFriends, setLoadingFriends] = useState(false);
@@ -65,21 +71,20 @@ export default function Referral() {
 
   const userId = String(user?.id || '999999999');
 
-  // Unique Invite Link by Telegram ID: https://t.me/kittymedallion_bot?startapp=ref_<userId>
-  const referralLink = buildReferralLink(userId, botUsername, appShortName);
-
-  useEffect(() => {
-    api.getBotInfo().then((info) => {
-      if (info?.botUsername) setBotUsername(info.botUsername);
-      if (info?.appShortName) setAppShortName(info.appShortName);
-    });
-  }, []);
+  // Unique Invite Link by Telegram ID: https://t.me/kittymedallion_bot?startapp=ref_tg_<userId>
+  const referralLink = buildReferralLink(userId, OFFICIAL_BOT_USERNAME, '');
 
   const loadFriendsList = async (force = false) => {
     setLoadingFriends(true);
     try {
       const myRefs = await referralService.getMyReferrals(userId, force);
-      setReferrals(myRefs);
+      setReferrals(
+        myRefs.filter(
+          (r) =>
+            isRealTelegramUserId(r.referredId) &&
+            String(r.referredId) !== userId
+        )
+      );
     } catch (e) {
       console.error('Error loading referrals list:', e);
     } finally {
@@ -90,6 +95,62 @@ export default function Referral() {
   useEffect(() => {
     loadFriendsList(true);
   }, [userId, activeTab]);
+
+  // Real-time listener on Firestore `referrals` & `users` so new invited friends appear live
+  useEffect(() => {
+    if (!userId) return;
+    const qRefs = query(
+      collection(db, 'referrals'),
+      where('referrerId', '==', userId)
+    );
+    const qUsers = query(
+      collection(db, 'users'),
+      where('referredBy', '==', userId)
+    );
+
+    const unsubRefs = onSnapshot(
+      qRefs,
+      () => {
+        referralService
+          .getMyReferrals(userId, true)
+          .then((list) =>
+            setReferrals(
+              list.filter(
+                (r) =>
+                  isRealTelegramUserId(r.referredId) &&
+                  String(r.referredId) !== userId
+              )
+            )
+          )
+          .catch(() => {});
+      },
+      () => {}
+    );
+
+    const unsubUsers = onSnapshot(
+      qUsers,
+      () => {
+        referralService
+          .getMyReferrals(userId, true)
+          .then((list) =>
+            setReferrals(
+              list.filter(
+                (r) =>
+                  isRealTelegramUserId(r.referredId) &&
+                  String(r.referredId) !== userId
+              )
+            )
+          )
+          .catch(() => {});
+      },
+      () => {}
+    );
+
+    return () => {
+      unsubRefs();
+      unsubUsers();
+    };
+  }, [userId]);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(referralLink);
@@ -124,11 +185,12 @@ export default function Referral() {
     }
   };
 
+  const realReferralsCount = referrals.length;
   const { referralsCount, earnedReferralCoins } = calculateTotalReferralStats(
-    user?.referralsCount,
-    user?.referralCount,
-    referrals.length,
-    user?.earnedReferralCoins
+    realReferralsCount,
+    realReferralsCount,
+    realReferralsCount,
+    realReferralsCount * REFERRAL_CONFIG.REFERRER_REWARD
   );
   const claimedMilestones: string[] = Array.isArray(user?.claimedMilestones)
     ? user.claimedMilestones
@@ -149,7 +211,7 @@ export default function Referral() {
             Referral Hub
           </h1>
           <p className="mt-1 text-xs text-zinc-400">
-            Earn +{REFERRAL_CONFIG.REFERRER_REWARD} KITTY per friend & unlock VIP Milestones.
+            Invite real Telegram friends — earn +{REFERRAL_CONFIG.REFERRER_REWARD} KITTY per friend & unlock VIP Milestones.
           </p>
         </div>
 
@@ -174,7 +236,7 @@ export default function Referral() {
 
         <div className="grid grid-cols-3 gap-2 sm:gap-2.5">
           <div className="flex min-w-0 flex-col rounded-2xl bg-[#0b0b0e]/80 p-2.5 sm:p-3.5 border border-white/[0.06]">
-            <span className="text-[10px] sm:text-[11px] text-zinc-400 truncate">Referrals</span>
+            <span className="text-[10px] sm:text-[11px] text-zinc-400 truncate">Frens</span>
             <span className="mt-1 sm:mt-1.5 font-display text-base sm:text-xl font-extrabold tabular-nums text-white truncate">
               {referralsCount.toLocaleString()}
             </span>
@@ -254,20 +316,8 @@ export default function Referral() {
         </button>
       </div>
 
-      {/* Referral Hub Navigation Tabs (2 Tabs: Milestones & My Frens) */}
+      {/* Referral Hub Navigation Tabs (My Frens & Milestones) */}
       <div className="mb-4 flex rounded-2xl bg-[#141419] p-1 border border-white/[0.06]">
-        <button
-          onClick={() => setActiveTab('milestones')}
-          className={`flex-1 flex items-center justify-center space-x-2 rounded-xl py-2.5 text-xs font-bold transition-all whitespace-nowrap ${
-            activeTab === 'milestones'
-              ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-zinc-950 shadow-sm'
-              : 'text-zinc-400 hover:text-white'
-          }`}
-        >
-          <Gift size={14} />
-          <span>Milestones</span>
-        </button>
-
         <button
           onClick={() => setActiveTab('friends')}
           className={`flex-1 flex items-center justify-center space-x-2 rounded-xl py-2.5 text-xs font-bold transition-all whitespace-nowrap ${
@@ -279,9 +329,157 @@ export default function Referral() {
           <Users size={14} />
           <span>My Frens ({referralsCount})</span>
         </button>
+
+        <button
+          onClick={() => setActiveTab('milestones')}
+          className={`flex-1 flex items-center justify-center space-x-2 rounded-xl py-2.5 text-xs font-bold transition-all whitespace-nowrap ${
+            activeTab === 'milestones'
+              ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-zinc-950 shadow-sm'
+              : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Gift size={14} />
+          <span>VIP Milestones</span>
+        </button>
       </div>
 
-      {/* TAB 1: PROGRESSIVE MILESTONES */}
+      {/* TAB 1: REFERRED FRIENDS LIST (Official Telegram Mini App Style) */}
+      {activeTab === 'friends' && (
+        <div className="rounded-3xl bg-[#141419] p-4 border border-white/[0.06] shadow-xl">
+          <div className="mb-3.5 flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <span className="font-display text-sm font-bold text-white">
+                Invited Telegram Frens
+              </span>
+              <span className="rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-bold text-amber-300">
+                {referrals.length}
+              </span>
+            </div>
+            <button
+              onClick={() => loadFriendsList(true)}
+              disabled={loadingFriends}
+              className="flex items-center space-x-1.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] active:scale-95 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-300 transition-all"
+            >
+              <RefreshCw
+                size={12}
+                className={loadingFriends ? 'animate-spin text-amber-400' : 'text-zinc-400'}
+              />
+              <span>Refresh</span>
+            </button>
+          </div>
+
+          {loadingFriends && referrals.length === 0 ? (
+            <div className="py-8 text-center text-xs text-zinc-500">
+              Syncing your Telegram frens list...
+            </div>
+          ) : referrals.length === 0 ? (
+            <div className="rounded-2xl bg-[#0b0b0e]/70 p-6 text-center border border-white/[0.04]">
+              <div className="mx-auto mb-2.5 flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                <Users size={20} />
+              </div>
+              <p className="text-xs font-bold text-zinc-200">
+                No invited Telegram frens yet
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500 leading-relaxed">
+                Share your referral link with a new user or any Telegram friend who hasn&apos;t used an invite link yet. Their real Telegram name will appear here instantly!
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {referrals.map((rec) => {
+                const displayName = formatTelegramDisplayName(
+                  rec.referredFirstName || rec.referredName,
+                  rec.referredLastName,
+                  rec.referredUsername,
+                  rec.referredId
+                );
+                const cleanUsername = String(rec.referredUsername || '')
+                  .trim()
+                  .replace(/^@/, '');
+
+                return (
+                  <div
+                    key={rec.id}
+                    className="flex items-center justify-between rounded-2xl bg-[#0b0b0e]/85 px-3.5 py-3 border border-white/[0.05] hover:border-amber-500/25 transition-all"
+                  >
+                    <div className="flex items-center space-x-3 min-w-0 pr-2">
+                      {/* Official Telegram Profile Photo or Gradient Initials Avatar */}
+                      <div className="relative shrink-0">
+                        {rec.referredPhotoUrl ? (
+                          <img
+                            src={rec.referredPhotoUrl}
+                            alt={displayName}
+                            className="h-10 w-10 rounded-full object-cover border border-amber-500/30 bg-[#141419]"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div
+                            className={`flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br ${getAvatarGradient(
+                              rec.referredId
+                            )} font-display text-xs font-extrabold text-white shadow-sm`}
+                          >
+                            {getInitials(displayName, cleanUsername)}
+                          </div>
+                        )}
+                        <div className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-[#0b0b0e] text-sky-400">
+                          <BadgeCheck size={13} className="fill-sky-400/20" />
+                        </div>
+                      </div>
+
+                      {/* Real Telegram Full Name & @username / ID */}
+                      <div className="min-w-0">
+                        <div className="flex items-center space-x-1.5">
+                          <span className="block font-display text-xs sm:text-sm font-bold text-white truncate">
+                            {displayName}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] font-mono text-zinc-400">
+                          {cleanUsername ? (
+                            <span className="text-sky-400 font-medium">
+                              @{cleanUsername}
+                            </span>
+                          ) : (
+                            <span className="text-zinc-500">
+                              ID: {rec.referredId}
+                            </span>
+                          )}
+                          <span className="text-zinc-600">·</span>
+                          <span className="text-zinc-500">
+                            {new Date(rec.timestamp).toLocaleDateString()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Earned Referral Reward Badge */}
+                    <div className="text-right shrink-0">
+                      <div className="flex items-center justify-end space-x-1 font-mono text-xs font-bold tabular-nums text-amber-400">
+                        <img
+                          src={LOGO_URL}
+                          className="h-3.5 w-3.5 rounded-full object-contain"
+                          alt="KITTY"
+                          referrerPolicy="no-referrer"
+                        />
+                        <span>
+                          +
+                          {(
+                            rec.rewardAmount || REFERRAL_CONFIG.REFERRER_REWARD
+                          ).toLocaleString()}
+                        </span>
+                      </div>
+                      <span className="mt-0.5 block font-mono text-[10px] font-medium text-emerald-400">
+                        +{rec.speedBoost || REFERRAL_CONFIG.REFERRER_SPEED_BOOST} / 24h
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 2: PROGRESSIVE MILESTONES */}
       {activeTab === 'milestones' && (
         <div className="flex flex-col space-y-3">
           {REFERRAL_MILESTONES.map((m) => {
@@ -396,82 +594,7 @@ export default function Referral() {
           })}
         </div>
       )}
-
-      {/* TAB 2: REFERRED FRIENDS LIST (from "referrals" collection) */}
-      {activeTab === 'friends' && (
-        <div className="rounded-3xl bg-[#141419] p-4 border border-white/[0.06]">
-          <div className="mb-3 flex items-center justify-between">
-            <span className="font-display text-xs font-bold text-white">
-              Direct Referral Ledger ({referrals.length})
-            </span>
-            <button
-              onClick={() => loadFriendsList(true)}
-              disabled={loadingFriends}
-              className="flex items-center space-x-1.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] active:scale-95 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-300 transition-all"
-            >
-              <RefreshCw
-                size={12}
-                className={loadingFriends ? 'animate-spin text-amber-400' : 'text-zinc-400'}
-              />
-              <span>Refresh</span>
-            </button>
-          </div>
-
-          {loadingFriends ? (
-            <div className="py-6 text-center text-xs text-zinc-500">
-              Loading your referral ledger...
-            </div>
-          ) : referrals.length === 0 ? (
-            <div className="rounded-2xl bg-[#0b0b0e]/70 p-5 text-center border border-white/[0.04]">
-              <p className="text-xs font-semibold text-zinc-300">
-                No friends referred yet.
-              </p>
-              <p className="mt-1 text-[11px] text-zinc-500">
-                Share your invite link above — every friend earns you +{REFERRAL_CONFIG.REFERRER_REWARD} KITTY automatically!
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-white/[0.05]">
-              {referrals.map((rec) => (
-                <div
-                  key={rec.id}
-                  className="flex items-center justify-between py-2.5 first:pt-1 last:pb-1"
-                >
-                  <div className="flex items-center space-x-3 min-w-0 pr-2">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 border border-amber-500/30 font-display text-xs font-extrabold text-amber-300">
-                      {getInitials(rec.referredName, rec.referredUsername)}
-                    </div>
-                    <div className="min-w-0">
-                      <span className="block text-xs font-bold text-white truncate">
-                        {rec.referredName}
-                      </span>
-                      <span className="block text-[10px] text-zinc-500 font-mono">
-                        {rec.referredUsername ? `@${rec.referredUsername} · ` : ''}
-                        {new Date(rec.timestamp).toLocaleDateString()}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="text-right shrink-0">
-                    <div className="flex items-center justify-end space-x-1 font-mono text-xs font-bold tabular-nums text-amber-400">
-                      <img
-                        src={LOGO_URL}
-                        className="h-3.5 w-3.5 rounded-full object-contain"
-                        alt="KITTY"
-                        referrerPolicy="no-referrer"
-                      />
-                      <span>+{(rec.rewardAmount || REFERRAL_CONFIG.REFERRER_REWARD).toLocaleString()}</span>
-                    </div>
-                    <span className="block font-mono text-[10px] font-medium text-emerald-400">
-                      +{rec.speedBoost || REFERRAL_CONFIG.REFERRER_SPEED_BOOST} / 24h
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
+

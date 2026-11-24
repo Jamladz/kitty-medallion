@@ -1,0 +1,30 @@
+{
+  "users": {
+    "999999999": {
+      "referredBy": null,
+      "balanceUsdt": 0,
+      "createdAt": 1789473230258,
+      "referredAt": null,
+      "vipExpiresAt": 0,
+      "referralsCount": 0,
+      "username": "dev_user",
+      "earnedReferralCoins": 0,
+      "referralCount": 0,
+      "balanceKitty": 39603.62108796296,
+      "lastName": "User",
+      "welcomeUsdtGranted": true,
+      "lastMiningClaim": 1795454341202,
+      "firstName": "Developer",
+      "claimedMilestones": [],
+      "id": "999999999",
+      "miningSpeed": 500,
+      "referrerId": null,
+      "_hydratedFromClient": true
+    }
+  },
+  "referrals": {},
+  "taskCompletions": {},
+  "withdrawals": {},
+  "earlyUsers": {},
+  "pendingReferrals": {}
+}
