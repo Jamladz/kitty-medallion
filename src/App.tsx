@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom';
 import { Pickaxe, CheckSquare, Users, Wallet } from 'lucide-react';
 import { AuthProvider, useAuth } from './components/AuthProvider';
 import { ReferralWelcomeSheet } from './components/ReferralWelcomeSheet';
@@ -9,8 +9,32 @@ import Referral from './pages/Referral';
 import WalletPage from './pages/WalletPage';
 import Profile from './pages/Profile';
 
+const APP_LOGO_URL = 'https://i.suar.me/PpEzN/l';
+const USDT_LOGO_URL = 'https://i.ibb.co/N2WMd6QC/Tether-USDT.png';
+
 const AppContent = () => {
   const { user, loading, error } = useAuth();
+  const navigate = useNavigate();
+
+  const photoUrl = React.useMemo(() => {
+    const tgUser = typeof window !== 'undefined' && window.Telegram?.WebApp?.initDataUnsafe?.user;
+    return tgUser?.photo_url || null;
+  }, []);
+
+  const initials = React.useMemo(() => {
+    const tgUser = typeof window !== 'undefined' && window.Telegram?.WebApp?.initDataUnsafe?.user;
+    const fName = user?.firstName || tgUser?.first_name || '';
+    const lName = user?.lastName || tgUser?.last_name || '';
+    
+    if (fName && lName) {
+      return (fName[0] + lName[0]).toUpperCase().slice(0, 2);
+    } else if (fName) {
+      return fName.slice(0, 2).toUpperCase();
+    } else if (user?.username) {
+      return user.username.slice(0, 2).toUpperCase();
+    }
+    return 'ME';
+  }, [user]);
 
   if (loading) {
     return (
@@ -52,33 +76,55 @@ const AppContent = () => {
     );
   }
 
-  const photoUrl = React.useMemo(() => {
-    const tgUser = typeof window !== 'undefined' && window.Telegram?.WebApp?.initDataUnsafe?.user;
-    return tgUser?.photo_url || null;
-  }, []);
-
-  const initials = React.useMemo(() => {
-    const tgUser = typeof window !== 'undefined' && window.Telegram?.WebApp?.initDataUnsafe?.user;
-    const fName = user?.firstName || tgUser?.first_name || '';
-    const lName = user?.lastName || tgUser?.last_name || '';
-    
-    if (fName && lName) {
-      return (fName[0] + lName[0]).toUpperCase().slice(0, 2);
-    } else if (fName) {
-      return fName.slice(0, 2).toUpperCase();
-    } else if (user?.username) {
-      return user.username.slice(0, 2).toUpperCase();
-    }
-    return 'ME';
-  }, [user]);
+  const balanceUsdt = Number(user?.balanceUsdt) || 0;
 
   return (
     <div className="relative flex h-[var(--app-height,100dvh)] w-full flex-col bg-[#0b0b0e] text-white overflow-hidden">
       {/* Subtle Top Radial Ambient Glow */}
       <div className="pointer-events-none fixed inset-x-0 top-0 h-72 bg-[radial-gradient(ellipse_80%_50%_at_50%_-15%,rgba(249,115,22,0.14),transparent)] z-0" />
 
-      {/* Main Scrollable Viewport Container with Safe-Area Padding */}
-      <main className="relative z-10 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain pt-[max(0px,env(safe-area-inset-top,0px))] pb-[calc(5.75rem+env(safe-area-inset-bottom,0px))]">
+      {/* Persistent Global Top Header across all pages (App Name & USDT Balance) */}
+      <header className="relative z-30 shrink-0 border-b border-white/[0.06] bg-[#0b0b0e]/85 backdrop-blur-xl pt-[max(0.625rem,var(--safe-top,0.625rem))] pb-2.5 px-4 sm:px-5">
+        <div className="mx-auto flex w-full max-w-[460px] items-center justify-between gap-2">
+          <div
+            onClick={() => navigate('/')}
+            className="flex items-center space-x-2 min-w-0 cursor-pointer select-none"
+          >
+            <img
+              src={APP_LOGO_URL}
+              alt="Kitty Medallion"
+              referrerPolicy="no-referrer"
+              className="h-6 w-6 sm:h-7 sm:w-7 shrink-0 rounded-full object-contain"
+            />
+            <span className="font-display text-sm sm:text-base font-bold tracking-tight text-white truncate">
+              Kitty Medallion
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => navigate('/wallet')}
+            className="flex items-center space-x-1.5 rounded-xl bg-[#141419] hover:bg-[#1a1a22] active:scale-95 px-2.5 py-1.5 border border-white/[0.07] text-xs font-medium transition-all shrink-0"
+          >
+            <img
+              src={USDT_LOGO_URL}
+              alt="USDT"
+              referrerPolicy="no-referrer"
+              className="h-4 w-4 shrink-0 rounded-full object-contain"
+            />
+            <span className="font-mono tabular-nums text-emerald-400 font-bold">
+              {balanceUsdt.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </span>
+            <span className="text-zinc-400 font-semibold text-[11px]">USDT</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Main Scrollable Viewport Container */}
+      <main className="relative z-10 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain pb-[calc(5.75rem+var(--safe-bottom,0px))]">
         <div className="mx-auto w-full max-w-[460px]">
           <Routes>
             <Route path="/" element={<Home />} />
@@ -95,7 +141,7 @@ const AppContent = () => {
       <ReferralWelcomeSheet />
 
       {/* Bottom Floating Navigation & Circular Telegram Profile Button */}
-      <div className="fixed inset-x-0 bottom-[max(0.875rem,env(safe-area-inset-bottom,0.875rem))] z-50 px-3.5 sm:px-5 pointer-events-none">
+      <div className="fixed inset-x-0 bottom-[max(0.875rem,var(--safe-bottom,0.875rem))] z-50 px-3.5 sm:px-5 pointer-events-none">
         <div className="mx-auto flex w-full max-w-[420px] items-center justify-between gap-2 sm:gap-3 pointer-events-auto">
           {/* Main Rounded Navigation Bar */}
           <nav className="flex-1 min-w-0 h-[56px] sm:h-[60px] flex items-center justify-between rounded-[24px] border border-white/[0.08] bg-[#141419]/92 px-1.5 sm:px-2 shadow-[0_16px_40px_rgba(0,0,0,0.8)] backdrop-blur-xl">

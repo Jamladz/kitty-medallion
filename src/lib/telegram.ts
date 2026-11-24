@@ -1,7 +1,8 @@
-import { TelegramWebAppUser } from '../types';
+import { HomeScreenStatus, TelegramWebAppUser } from '../types';
 import { REFERRAL_CONFIG } from './rewardsEngine';
 
 export const OFFICIAL_BOT_USERNAME = 'kittymedallion_bot';
+const HOME_SCREEN_ADDED_STORAGE_KEY = 'kitty_tg_homescreen_added_v1';
 
 // Capture initial launch search & hash parameters immediately at module load time
 // BEFORE React Router alters window.location.hash or search.
@@ -11,7 +12,239 @@ const INITIAL_LAUNCH_HASH =
   typeof window !== 'undefined' ? window.location.hash : '';
 
 /**
- * Cleans the "ref_" prefix (including URL-encoded or Base64-encoded start_param values)
+ * Syncs Telegram Bot API 8.0+ safeAreaInset & contentSafeAreaInset to root CSS variables
+ * so the fixed header and bottom navigation never overlap Telegram's native fullscreen bar.
+ */
+export function syncTelegramSafeAreas(): void {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  const webApp = window.Telegram?.WebApp;
+  if (!webApp) return;
+
+  try {
+    const safeTop = Number(webApp.safeAreaInset?.top) || 0;
+    const contentTop = Number(webApp.contentSafeAreaInset?.top) || 0;
+    const totalTop = safeTop + contentTop;
+
+    const safeBottom = Number(webApp.safeAreaInset?.bottom) || 0;
+    const contentBottom = Number(webApp.contentSafeAreaInset?.bottom) || 0;
+    const totalBottom = Math.max(safeBottom, contentBottom);
+
+    const root = document.documentElement;
+    if (totalTop > 0) {
+      root.style.setProperty('--tg-header-safe-top', `${totalTop}px`);
+    } else {
+      root.style.removeProperty('--tg-header-safe-top');
+    }
+
+    if (totalBottom > 0) {
+      root.style.setProperty('--tg-nav-safe-bottom', `${totalBottom}px`);
+    } else {
+      root.style.removeProperty('--tg-nav-safe-bottom');
+    }
+
+    if (webApp.viewportStableHeight && webApp.viewportStableHeight > 100) {
+      root.style.setProperty(
+        '--app-height',
+        `${webApp.viewportStableHeight}px`
+      );
+    }
+  } catch {}
+}
+
+let fullscreenInitialized = false;
+let fullscreenUnsupported = false;
+
+/**
+ * Requests full-screen mode using the official Telegram Mini Apps API (Bot API 8.0+):
+ * 1) webApp.ready() & webApp.expand()
+ * 2) webApp.disableVerticalSwipes() (Bot API 7.7+)
+ * 3) webApp.requestFullscreen() (Bot API 8.0+)
+ * 4) Listens to fullscreenChanged, fullscreenFailed, safeAreaChanged, contentSafeAreaChanged, viewportChanged
+ */
+export function initTelegramFullscreen(): void {
+  if (typeof window === 'undefined') return;
+  const webApp = window.Telegram?.WebApp;
+  if (!webApp) return;
+
+  try {
+    webApp.ready();
+  } catch {}
+
+  try {
+    webApp.expand();
+  } catch {}
+
+  try {
+    if (typeof webApp.disableVerticalSwipes === 'function') {
+      webApp.disableVerticalSwipes();
+    }
+  } catch {}
+
+  try {
+    webApp.setHeaderColor?.('#0b0b0e');
+    webApp.setBackgroundColor?.('#0b0b0e');
+    webApp.setBottomBarColor?.('#0b0b0e');
+  } catch {}
+
+  const attemptRequestFullscreen = () => {
+    if (fullscreenUnsupported) return;
+    try {
+      if (!webApp.isExpanded) {
+        webApp.expand();
+      }
+      const supportsFullscreen =
+        typeof webApp.requestFullscreen === 'function' &&
+        (!webApp.isVersionAtLeast || webApp.isVersionAtLeast('8.0'));
+
+      if (supportsFullscreen && !webApp.isFullscreen) {
+        webApp.requestFullscreen!();
+      }
+    } catch {}
+    syncTelegramSafeAreas();
+  };
+
+  if (!fullscreenInitialized) {
+    fullscreenInitialized = true;
+
+    try {
+      if (typeof webApp.onEvent === 'function') {
+        webApp.onEvent('fullscreenChanged', () => {
+          syncTelegramSafeAreas();
+        });
+
+        webApp.onEvent('fullscreenFailed', (payload?: { error?: string }) => {
+          if (payload?.error === 'UNSUPPORTED') {
+            fullscreenUnsupported = true;
+          }
+          try {
+            webApp.expand();
+          } catch {}
+          syncTelegramSafeAreas();
+        });
+
+        webApp.onEvent('safeAreaChanged', syncTelegramSafeAreas);
+        webApp.onEvent('contentSafeAreaChanged', syncTelegramSafeAreas);
+        webApp.onEvent('viewportChanged', syncTelegramSafeAreas);
+        webApp.onEvent('activated', () => {
+          attemptRequestFullscreen();
+        });
+
+        // Also listen globally for official homeScreenAdded event so we never miss it
+        webApp.onEvent('homeScreenAdded', () => {
+          markHomeScreenAddedLocally();
+        });
+      }
+    } catch {}
+
+    // One-time gesture fallback in case mobile WebView requires a user interaction to enter fullscreen
+    const handleFirstInteraction = () => {
+      attemptRequestFullscreen();
+      window.removeEventListener('pointerdown', handleFirstInteraction);
+      window.removeEventListener('touchstart', handleFirstInteraction);
+    };
+    window.addEventListener('pointerdown', handleFirstInteraction, {
+      passive: true,
+    });
+    window.addEventListener('touchstart', handleFirstInteraction, {
+      passive: true,
+    });
+  }
+
+  attemptRequestFullscreen();
+  setTimeout(attemptRequestFullscreen, 150);
+  setTimeout(syncTelegramSafeAreas, 350);
+}
+
+/**
+ * Records locally that Telegram's official `homeScreenAdded` event or `checkHomeScreenStatus === 'added'` succeeded.
+ */
+export function markHomeScreenAddedLocally(): void {
+  try {
+    localStorage.setItem(HOME_SCREEN_ADDED_STORAGE_KEY, '1');
+  } catch {}
+}
+
+export function isHomeScreenAddedLocally(): boolean {
+  try {
+    return localStorage.getItem(HOME_SCREEN_ADDED_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Official Telegram Bot API 8.0+ Home Screen Status Checker:
+ * Calls `Telegram.WebApp.checkHomeScreenStatus(callback)` and listens to `homeScreenChecked`.
+ * Returns: 'added' | 'missed' | 'unknown' | 'unsupported'
+ */
+export function checkOfficialTelegramHomeScreenStatus(): Promise<HomeScreenStatus> {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') {
+      resolve('unsupported');
+      return;
+    }
+
+    const webApp = window.Telegram?.WebApp;
+    if (!webApp) {
+      resolve('unsupported');
+      return;
+    }
+
+    const supportsHomeScreen =
+      typeof webApp.checkHomeScreenStatus === 'function' &&
+      (!webApp.isVersionAtLeast || webApp.isVersionAtLeast('8.0'));
+
+    if (!supportsHomeScreen) {
+      resolve('unsupported');
+      return;
+    }
+
+    let settled = false;
+    const finish = (rawStatus?: string) => {
+      if (settled) return;
+      settled = true;
+      try {
+        webApp.offEvent?.('homeScreenChecked', handleEvent);
+      } catch {}
+
+      const normalized = String(rawStatus || '').toLowerCase();
+      if (normalized === 'added') {
+        markHomeScreenAddedLocally();
+        resolve('added');
+      } else if (normalized === 'missed' || normalized === 'not-added') {
+        resolve('missed');
+      } else if (normalized === 'unknown') {
+        resolve(isHomeScreenAddedLocally() ? 'added' : 'unknown');
+      } else if (normalized === 'unsupported') {
+        resolve('unsupported');
+      } else {
+        resolve(isHomeScreenAddedLocally() ? 'added' : 'unknown');
+      }
+    };
+
+    const handleEvent = (payload?: { status?: string } | string) => {
+      const st =
+        typeof payload === 'string' ? payload : payload?.status || 'unknown';
+      finish(st);
+    };
+
+    try {
+      webApp.onEvent?.('homeScreenChecked', handleEvent);
+      webApp.checkHomeScreenStatus!((status: HomeScreenStatus) => {
+        finish(status);
+      });
+    } catch {
+      finish('unsupported');
+    }
+
+    setTimeout(() => {
+      finish(isHomeScreenAddedLocally() ? 'added' : 'unknown');
+    }, 1800);
+  });
+}
+
+/**
+ * Cleans the "ref_tg_" / "ref_" prefix (including URL-encoded or Base64-encoded start_param values)
  * and validates that the referrerId is a valid numeric Telegram ID
  * and not equal to currentUserId (prevents self-referral).
  */
@@ -142,7 +375,7 @@ function extractReferrerFromUrlStrings(
   return null;
 }
 
-// Immediately persist any referrer detected at bundle evaluation time
+// Immediately persist any referrer detected & initialize Telegram Fullscreen at bundle load time
 if (typeof window !== 'undefined') {
   const earlyRef =
     sanitizeReferrerId(window.Telegram?.WebApp?.initDataUnsafe?.start_param) ||
@@ -150,6 +383,7 @@ if (typeof window !== 'undefined') {
   if (earlyRef) {
     persistDetectedReferrer(earlyRef);
   }
+  initTelegramFullscreen();
 }
 
 /**
@@ -358,12 +592,6 @@ export function triggerTelegramHaptic(
   type: 'success' | 'warning' | 'error' = 'success'
 ) {
   try {
-    (
-      window.Telegram?.WebApp as {
-        HapticFeedback?: {
-          notificationOccurred?: (t: string) => void;
-        };
-      }
-    )?.HapticFeedback?.notificationOccurred?.(type);
+    window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred?.(type);
   } catch {}
 }

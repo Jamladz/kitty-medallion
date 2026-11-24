@@ -155,7 +155,11 @@ export const api = {
   claimTask: async (taskId: string) => {
     clientTasksCache = null; // Invalidate cache on claim
     try {
-      return await fetchApi('/tasks/claim', { method: 'POST', body: JSON.stringify({ taskId }) });
+      const res = await fetchApi('/tasks/claim', { method: 'POST', body: JSON.stringify({ taskId }) });
+      if (res?.user) {
+        notifyUserUpdated(res.user);
+      }
+      return res;
     } catch (err) {
       console.warn('API claimTask failed, using client-fallback for direct Firestore transaction', err);
       const userId = getUserId();
@@ -173,10 +177,14 @@ export const api = {
         if (!userSnap.exists()) throw new Error('User not found');
         
         transaction.set(completionRef, { completedAt: Date.now() });
-        transaction.update(userRef, {
+        const userUpdate: Record<string, any> = {
           balanceKitty: increment(staticTask.reward || 0),
           miningSpeed: increment(staticTask.miningBoost || 0)
-        });
+        };
+        if (taskId === 'home_screen') {
+          userUpdate.homeScreenAdded = true;
+        }
+        transaction.update(userRef, userUpdate);
       });
       return { success: true };
     }

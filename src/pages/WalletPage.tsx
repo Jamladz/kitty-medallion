@@ -3,7 +3,7 @@ import { useAuth } from '../components/AuthProvider';
 import { api } from '../lib/api';
 import { ArrowDownUp, ArrowUpRight } from 'lucide-react';
 
-const LOGO_URL = 'https://i.suar.me/PpEzN/l';
+const LOGO_URL = 'https://i.ibb.co/3ykKfM0F/file-00000000e9e88246928f3f50b525d0a7.png';
 const RATE = 10000; // 10k kitty = 1 usdt
 const USDT_LOGO_URL = 'https://i.ibb.co/N2WMd6QC/Tether-USDT.png';
 

@@ -1004,8 +1004,29 @@ app.post('/api/claim-mining', authenticateTelegram, async (req, res) => {
 
 app.get('/api/tasks', authenticateTelegram, async (req, res) => {
   const userId = String((req as any).userId);
-  const completedList = serverLedger.taskCompletions[userId] || [];
+  let completedList = serverLedger.taskCompletions[userId] || [];
+
+  if (isFirestoreReadAvailable()) {
+    try {
+      const compSnap = await db.collection('users').doc(userId).collection('task_completions').get();
+      if (compSnap.docs.length > 0) {
+        const merged = new Set(completedList);
+        for (const docSnap of compSnap.docs) {
+          merged.add(docSnap.id);
+        }
+        completedList = Array.from(merged);
+        serverLedger.taskCompletions[userId] = completedList;
+      }
+    } catch (fsErr) {
+      markFirestoreReadError(fsErr);
+    }
+  }
+
   const completedSet = new Set(completedList);
+  const user = serverLedger.users[userId];
+  if (user?.homeScreenAdded) {
+    completedSet.add('home_screen');
+  }
 
   const tasks = DEFAULT_TASKS.map((task) => ({
     ...task,
@@ -1032,14 +1053,36 @@ app.post('/api/tasks/claim', authenticateTelegram, async (req, res) => {
 
     serverLedger.taskCompletions[userId] = [...completedList, taskId];
     let user = serverLedger.users[userId];
+    if (!user && isFirestoreReadAvailable()) {
+      try {
+        const snap = await db.collection('users').doc(userId).get();
+        if (snap.exists) {
+          user = snap.data();
+        }
+      } catch (fsErr) {
+        markFirestoreReadError(fsErr);
+      }
+    }
+
     if (user) {
       user.balanceKitty = (Number(user.balanceKitty) || 0) + (staticTask.reward || 0);
       user.miningSpeed =
         (Number(user.miningSpeed) || REFERRAL_REWARDS.BASE_MINING_SPEED) +
         (staticTask.miningBoost || 0);
+      if (taskId === 'home_screen') {
+        user.homeScreenAdded = true;
+      }
       serverLedger.users[userId] = user;
       syncDocToFirestoreWriteOnly('users', userId, user);
     }
+
+    db.collection('users')
+      .doc(userId)
+      .collection('task_completions')
+      .doc(taskId)
+      .set({ completedAt: Date.now() }, { merge: true })
+      .catch(() => {});
+
     saveLedgerToDisk(true);
 
     res.json({

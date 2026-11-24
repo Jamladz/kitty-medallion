@@ -1,3 +1,12 @@
+export interface TelegramSafeAreaInset {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+export type HomeScreenStatus = 'unsupported' | 'unknown' | 'added' | 'missed';
+
 export interface TelegramWebApp {
   initData: string;
   initDataUnsafe: any;
@@ -10,23 +19,37 @@ export interface TelegramWebApp {
   viewportStableHeight: number;
   headerColor: string;
   backgroundColor: string;
+  bottomBarColor?: string;
   isClosingConfirmationEnabled: boolean;
+  isVerticalSwipesEnabled?: boolean;
+  isFullscreen?: boolean;
+  safeAreaInset?: TelegramSafeAreaInset;
+  contentSafeAreaInset?: TelegramSafeAreaInset;
   expand: () => void;
   close: () => void;
   ready: () => void;
   requestFullscreen?: () => void;
-  isFullscreen?: boolean;
-  onEvent: (eventType: string, eventHandler: Function) => void;
-  offEvent: (eventType: string, eventHandler: Function) => void;
+  exitFullscreen?: () => void;
+  disableVerticalSwipes?: () => void;
+  enableVerticalSwipes?: () => void;
+  lockOrientation?: () => void;
+  unlockOrientation?: () => void;
+  setHeaderColor?: (color: string) => void;
+  setBackgroundColor?: (color: string) => void;
+  setBottomBarColor?: (color: string) => void;
+  onEvent: (eventType: string, eventHandler: (...args: any[]) => void) => void;
+  offEvent: (eventType: string, eventHandler: (...args: any[]) => void) => void;
   addToHomeScreen?: () => void;
-  checkHomeScreenStatus?: (callback: (status: string) => void) => void;
+  checkHomeScreenStatus?: (callback?: (status: HomeScreenStatus) => void) => void;
   isVersionAtLeast?: (version: string) => boolean;
   showAlert: (message: string, callback?: () => void) => void;
   showPopup: (params: any, callback?: (id: string) => void) => void;
   openTelegramLink: (url: string) => void;
+  openLink?: (url: string, options?: { try_instant_view?: boolean }) => void;
   HapticFeedback?: {
     notificationOccurred?: (type: 'error' | 'success' | 'warning') => void;
     impactOccurred?: (style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft') => void;
+    selectionChanged?: () => void;
   };
 }
 

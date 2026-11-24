@@ -1,5 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
+import { HomeScreenStatus } from '../types';
+import {
+  checkOfficialTelegramHomeScreenStatus,
+  isHomeScreenAddedLocally,
+  markHomeScreenAddedLocally,
+  triggerTelegramHaptic,
+} from '../lib/telegram';
 import {
   CheckCircle2,
   ChevronRight,
@@ -9,12 +16,41 @@ import {
   Send,
   Zap,
   Sparkles,
+  ShieldCheck,
 } from 'lucide-react';
 
-const LOGO_URL = 'https://i.suar.me/PpEzN/l';
+const LOGO_URL = 'https://i.ibb.co/3ykKfM0F/file-00000000e9e88246928f3f50b525d0a7.png';
 
-const formatTaskMeta = (task: any) => {
+const formatTaskMeta = (
+  task: any,
+  homeScreenStatus: HomeScreenStatus,
+  awaitingHomeScreenVerify: boolean
+) => {
   if (task.type === 'home_screen' || task.id === 'home_screen') {
+    if (task.isCompleted) {
+      return {
+        title: 'Add to Home Screen',
+        subtitle: 'Verified on phone home screen',
+        actionLabel: 'Done',
+        Icon: Smartphone,
+      };
+    }
+    if (homeScreenStatus === 'added') {
+      return {
+        title: 'Add to Home Screen',
+        subtitle: 'Shortcut detected · Tap to claim reward',
+        actionLabel: 'Claim',
+        Icon: ShieldCheck,
+      };
+    }
+    if (awaitingHomeScreenVerify) {
+      return {
+        title: 'Add to Home Screen',
+        subtitle: 'Confirm prompt then tap Verify to check',
+        actionLabel: 'Verify',
+        Icon: ShieldCheck,
+      };
+    }
     return {
       title: 'Add to Home Screen',
       subtitle: '1-tap instant access shortcut',
@@ -59,14 +95,46 @@ export default function Tasks() {
   const [loading, setLoading] = useState(true);
   const [claiming, setClaiming] = useState<string | null>(null);
 
-  const [, setIsHomeScreenSupported] = useState(false);
-  const [, setHomeScreenStatus] = useState<'added' | 'not-added' | 'unknown'>('unknown');
+  const [homeScreenStatus, setHomeScreenStatus] = useState<HomeScreenStatus>(
+    isHomeScreenAddedLocally() ? 'added' : 'unknown'
+  );
+  const [awaitingHomeScreenVerify, setAwaitingHomeScreenVerify] =
+    useState(false);
 
+  const tasksRef = useRef<any[]>([]);
   useEffect(() => {
-    fetchTasks();
+    tasksRef.current = tasks;
+  }, [tasks]);
+
+  const claimReward = useCallback(async (taskId: string) => {
+    setClaiming(taskId);
+    try {
+      await api.claimTask(taskId);
+      triggerTelegramHaptic('success');
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, isCompleted: true } : t))
+      );
+      if (taskId === 'home_screen') {
+        setAwaitingHomeScreenVerify(false);
+        window.Telegram?.WebApp?.showAlert?.(
+          'Home Screen shortcut verified! +2,000 KITTY & +100/24h speed boost credited to your account.'
+        );
+      }
+    } catch (e: any) {
+      const msg = String(e?.message || '');
+      if (msg.toLowerCase().includes('already completed')) {
+        setTasks((prev) =>
+          prev.map((t) => (t.id === taskId ? { ...t, isCompleted: true } : t))
+        );
+      } else {
+        window.Telegram?.WebApp?.showAlert?.(msg || 'Failed to claim task');
+      }
+    } finally {
+      setClaiming(null);
+    }
   }, []);
 
-  const fetchTasks = async () => {
+  const fetchTasks = useCallback(async () => {
     try {
       const res = await api.getTasks();
       setTasks(res.tasks || []);
@@ -74,24 +142,170 @@ export default function Tasks() {
       console.error(e);
     }
     setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchTasks();
+  }, [fetchTasks]);
+
+  // Official Telegram Bot API 8.0+ Home Screen status check & event listeners
+  useEffect(() => {
+    let mounted = true;
+
+    const verifyStatusFromTelegram = async (autoClaimIfAdded = false) => {
+      const status = await checkOfficialTelegramHomeScreenStatus();
+      if (!mounted) return;
+      setHomeScreenStatus(status);
+
+      if (status === 'added' && autoClaimIfAdded) {
+        const hsTask = tasksRef.current.find(
+          (t) => t.type === 'home_screen' || t.id === 'home_screen'
+        );
+        if (hsTask && !hsTask.isCompleted) {
+          claimReward(hsTask.id);
+        }
+      }
+    };
+
+    verifyStatusFromTelegram(false);
+
+    const webApp = window.Telegram?.WebApp;
+    if (!webApp) return;
+
+    // Fired officially by Telegram when the user confirms "Add" in the native Add to Home Screen prompt
+    const handleHomeScreenAdded = () => {
+      markHomeScreenAddedLocally();
+      if (!mounted) return;
+      setHomeScreenStatus('added');
+      setAwaitingHomeScreenVerify(false);
+
+      const hsTask = tasksRef.current.find(
+        (t) => t.type === 'home_screen' || t.id === 'home_screen'
+      );
+      if (hsTask && !hsTask.isCompleted) {
+        claimReward(hsTask.id);
+      }
+    };
+
+    // Fired officially by Telegram when checkHomeScreenStatus completes
+    const handleHomeScreenChecked = (payload?: { status?: string } | string) => {
+      if (!mounted) return;
+      const rawStatus =
+        typeof payload === 'string' ? payload : payload?.status || '';
+      const normalized = rawStatus.toLowerCase();
+
+      if (normalized === 'added') {
+        markHomeScreenAddedLocally();
+        setHomeScreenStatus('added');
+      } else if (normalized === 'missed' || normalized === 'not-added') {
+        setHomeScreenStatus('missed');
+      }
+    };
+
+    const handleAppResume = () => {
+      if (document.visibilityState === 'hidden') return;
+      // When user returns from OS home screen shortcut confirmation, re-verify status via Telegram API
+      verifyStatusFromTelegram(awaitingHomeScreenVerify);
+    };
+
+    try {
+      webApp.onEvent?.('homeScreenAdded', handleHomeScreenAdded);
+      webApp.onEvent?.('homeScreenChecked', handleHomeScreenChecked);
+      webApp.onEvent?.('activated', handleAppResume);
+    } catch {}
+
+    window.addEventListener('focus', handleAppResume);
+    document.addEventListener('visibilitychange', handleAppResume);
+
+    return () => {
+      mounted = false;
+      try {
+        webApp.offEvent?.('homeScreenAdded', handleHomeScreenAdded);
+        webApp.offEvent?.('homeScreenChecked', handleHomeScreenChecked);
+        webApp.offEvent?.('activated', handleAppResume);
+      } catch {}
+      window.removeEventListener('focus', handleAppResume);
+      document.removeEventListener('visibilitychange', handleAppResume);
+    };
+  }, [awaitingHomeScreenVerify, claimReward]);
+
+  const handleHomeScreenTask = async (task: any) => {
+    const webApp = window.Telegram?.WebApp;
+
+    // 1. Check current official Telegram Home Screen status first
+    setClaiming(task.id);
+    const currentStatus = await checkOfficialTelegramHomeScreenStatus();
+    setHomeScreenStatus(currentStatus);
+
+    // 2. If Telegram confirms the shortcut is already 'added' (or homeScreenAdded event fired), claim reward!
+    if (currentStatus === 'added' || isHomeScreenAddedLocally()) {
+      await claimReward(task.id);
+      return;
+    }
+
+    setClaiming(null);
+
+    // 3. Check if official Telegram Bot API 8.0+ addToHomeScreen is available
+    const canPromptAddToHomeScreen =
+      Boolean(webApp) &&
+      typeof webApp.addToHomeScreen === 'function' &&
+      (!webApp.isVersionAtLeast || webApp.isVersionAtLeast('8.0'));
+
+    if (!canPromptAddToHomeScreen || currentStatus === 'unsupported') {
+      webApp?.showAlert?.(
+        'Adding to Home Screen requires the official Telegram Mobile app (v8.0+ on Android or iOS). Please open Kitty Medallion on your phone in Telegram to complete this mission.'
+      );
+      return;
+    }
+
+    // 4. If user hasn't opened the native Add prompt yet, open Telegram's official addToHomeScreen() dialog
+    //    and switch the task button to "Verify" (do NOT claim until homeScreenAdded fires or checkHomeScreenStatus === 'added')
+    if (!awaitingHomeScreenVerify) {
+      setAwaitingHomeScreenVerify(true);
+      try {
+        webApp.addToHomeScreen!();
+      } catch (err) {
+        console.error('Error calling addToHomeScreen:', err);
+      }
+      return;
+    }
+
+    // 5. User tapped "Verify": we just checked `checkOfficialTelegramHomeScreenStatus()` above and it is NOT 'added'!
+    triggerTelegramHaptic('warning');
+    if (webApp?.showPopup) {
+      webApp.showPopup(
+        {
+          title: 'Shortcut Not Detected',
+          message:
+            'Kitty Medallion has not been added to your phone Home Screen yet. Tap "Add Shortcut" and confirm in Telegram to verify and claim your +2,000 KITTY reward.',
+          buttons: [
+            { id: 'add_again', type: 'default', text: 'Add Shortcut' },
+            { id: 'cancel', type: 'cancel' },
+          ],
+        },
+        (btnId) => {
+          if (btnId === 'add_again') {
+            try {
+              webApp.addToHomeScreen?.();
+            } catch {}
+          }
+        }
+      );
+    } else {
+      webApp?.showAlert?.(
+        'Shortcut not found on your Home Screen yet. Please confirm adding Kitty Medallion to your Home Screen first.'
+      );
+      try {
+        webApp?.addToHomeScreen?.();
+      } catch {}
+    }
   };
 
   const handleTaskAction = async (task: any) => {
     if (task.isCompleted || claiming) return;
 
-    if (task.type === 'home_screen') {
-      const webApp = window.Telegram?.WebApp;
-      if (webApp && typeof webApp.addToHomeScreen === 'function') {
-        try {
-          webApp.addToHomeScreen();
-          claimReward(task.id);
-        } catch (err) {
-          console.error('Error with addToHomeScreen:', err);
-          claimReward(task.id);
-        }
-      } else {
-        claimReward(task.id);
-      }
+    if (task.type === 'home_screen' || task.id === 'home_screen') {
+      await handleHomeScreenTask(task);
       return;
     }
 
@@ -102,7 +316,7 @@ export default function Tasks() {
           {
             title: 'Watch Ad',
             message: 'This will open a sponsored ad. Continue?',
-            buttons: [{ type: 'ok' }, { type: 'cancel' }],
+            buttons: [{ id: 'ok', type: 'ok' }, { id: 'cancel', type: 'cancel' }],
           },
           (btnId) => {
             if (btnId === 'ok') {
@@ -133,88 +347,6 @@ export default function Tasks() {
 
     await claimReward(task.id);
   };
-
-  const claimReward = async (taskId: string) => {
-    setClaiming(taskId);
-    try {
-      await api.claimTask(taskId);
-      setTasks((prev) =>
-        prev.map((t) => (t.id === taskId ? { ...t, isCompleted: true } : t))
-      );
-    } catch (e: any) {
-      window.Telegram?.WebApp?.showAlert?.(e.message || 'Failed to claim task');
-    }
-    setClaiming(null);
-  };
-
-  useEffect(() => {
-    if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
-      const tg = window.Telegram.WebApp;
-
-      if (typeof tg.addToHomeScreen === 'function') {
-        setIsHomeScreenSupported(true);
-
-        if (typeof tg.checkHomeScreenStatus === 'function') {
-          try {
-            tg.checkHomeScreenStatus((status: 'added' | 'not-added' | 'unknown') => {
-              setHomeScreenStatus(status || 'unknown');
-            });
-          } catch (e) {
-            console.error('Error checking home screen status:', e);
-          }
-        }
-      } else {
-        const version = tg.version || '0.0';
-        const parts = version.split('.').map(Number);
-        if (parts[0] > 7 || (parts[0] === 7 && parts[1] >= 10)) {
-          setIsHomeScreenSupported(true);
-        }
-      }
-
-      const handleAdded = () => {
-        setHomeScreenStatus('added');
-        if (tg.showAlert) {
-          tg.showAlert('Kitty Medallion has been added to your Home Screen!');
-        }
-        const hsTask = tasks.find((t) => t.type === 'home_screen');
-        if (hsTask && !hsTask.isCompleted) {
-          claimReward(hsTask.id);
-        }
-      };
-
-      const handleChecked = (payload: any) => {
-        if (payload && payload.status) {
-          setHomeScreenStatus(payload.status);
-          if (payload.status === 'added') {
-            const hsTask = tasks.find((t) => t.type === 'home_screen');
-            if (hsTask && !hsTask.isCompleted) {
-              claimReward(hsTask.id);
-            }
-          }
-        }
-      };
-
-      try {
-        if (typeof tg.onEvent === 'function') {
-          tg.onEvent('homeScreenAdded', handleAdded);
-          tg.onEvent('homeScreenChecked', handleChecked);
-        }
-      } catch (e) {
-        console.error('Error binding events:', e);
-      }
-
-      return () => {
-        try {
-          if (typeof tg.offEvent === 'function') {
-            tg.offEvent('homeScreenAdded', handleAdded);
-            tg.offEvent('homeScreenChecked', handleChecked);
-          }
-        } catch (e) {
-          console.error('Error unbinding events:', e);
-        }
-      };
-    }
-  }, [tasks]);
 
   if (loading) {
     return (
@@ -288,9 +420,19 @@ export default function Tasks() {
       {/* Uniform Equal-Sized Mission Frames */}
       <div className="flex flex-col space-y-2.5 sm:space-y-3">
         {tasks.map((task) => {
-          const { title, subtitle, actionLabel, Icon } = formatTaskMeta(task);
+          const isHomeScreenTask =
+            task.type === 'home_screen' || task.id === 'home_screen';
+          const { title, subtitle, actionLabel, Icon } = formatTaskMeta(
+            task,
+            homeScreenStatus,
+            awaitingHomeScreenVerify
+          );
           const isCompleted = Boolean(task.isCompleted);
           const isClaiming = claiming === task.id;
+          const isVerifyMode =
+            isHomeScreenTask &&
+            !isCompleted &&
+            (awaitingHomeScreenVerify || homeScreenStatus === 'added');
 
           return (
             <div
@@ -299,6 +441,8 @@ export default function Tasks() {
               className={`group flex h-[86px] sm:h-[88px] w-full items-center justify-between gap-2.5 sm:gap-3.5 rounded-2xl px-3.5 sm:px-4 border transition-all cursor-pointer select-none ${
                 isCompleted
                   ? 'bg-[#141419]/65 border-emerald-500/20'
+                  : isVerifyMode
+                  ? 'bg-[#141419] border-emerald-500/35 hover:border-emerald-400/50 active:scale-[0.99] shadow-lg shadow-black/25'
                   : 'bg-[#141419] border-white/[0.07] hover:border-amber-500/35 active:scale-[0.99] shadow-lg shadow-black/25'
               }`}
             >
@@ -307,6 +451,8 @@ export default function Tasks() {
                 className={`flex h-11 w-11 sm:h-12 sm:w-12 shrink-0 items-center justify-center rounded-2xl border transition-colors ${
                   isCompleted
                     ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400'
+                    : isVerifyMode
+                    ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-400'
                     : 'bg-gradient-to-br from-amber-500/15 to-orange-500/5 border-amber-500/25 text-amber-400 group-hover:border-amber-400/40'
                 }`}
               >
@@ -318,7 +464,11 @@ export default function Tasks() {
                 <span className="font-display text-[13px] sm:text-sm font-bold text-white truncate">
                   {title}
                 </span>
-                <span className="mt-0.5 text-[11px] text-zinc-400 truncate">
+                <span
+                  className={`mt-0.5 text-[11px] truncate ${
+                    isVerifyMode ? 'text-emerald-300/90 font-medium' : 'text-zinc-400'
+                  }`}
+                >
                   {subtitle}
                 </span>
 
@@ -352,6 +502,8 @@ export default function Tasks() {
                 className={`flex h-9 w-[78px] sm:h-10 sm:w-[86px] shrink-0 items-center justify-center space-x-1 rounded-xl text-xs font-bold transition-all ${
                   isCompleted
                     ? 'bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 cursor-default'
+                    : isVerifyMode
+                    ? 'bg-gradient-to-r from-emerald-500 to-teal-400 text-zinc-950 hover:from-emerald-400 hover:to-teal-300 active:scale-95 shadow-md shadow-emerald-500/20'
                     : 'bg-gradient-to-r from-amber-500 to-orange-500 text-zinc-950 hover:from-amber-400 hover:to-orange-400 active:scale-95 shadow-md shadow-amber-500/15'
                 }`}
               >
@@ -376,4 +528,3 @@ export default function Tasks() {
     </div>
   );
 }
-

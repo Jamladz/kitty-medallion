@@ -4,9 +4,8 @@ import { motion } from 'framer-motion';
 import { api } from '../lib/api';
 import { Gift, ShieldCheck, Zap, Users, Sparkles, Clock, CheckCircle2 } from 'lucide-react';
 
-const LOGO_URL = 'https://i.suar.me/PpEzN/l';
-const USDT_LOGO_URL = 'https://i.ibb.co/N2WMd6QC/Tether-USDT.png';
-const RATE = 10000;
+const APP_LOGO_URL = 'https://i.suar.me/PpEzN/l';
+const KITTY_COIN_ICON_URL = 'https://i.ibb.co/3ykKfM0F/file-00000000e9e88246928f3f50b525d0a7.png';
 const CYCLE_DURATION_MS = 24 * 60 * 60 * 1000; // 24 Hours
 
 const formatDuration = (ms: number) => {
@@ -58,7 +57,6 @@ export default function Home() {
   const remainingMs = Math.max(0, CYCLE_DURATION_MS - elapsedMs);
   const isCycleReady = elapsedMs >= CYCLE_DURATION_MS;
   const sessionMined = progressRatio * miningSpeed;
-  const usdtEquivalent = walletBalance / RATE;
 
   const handleClaimCycle = async () => {
     if (!isCycleReady || claimingCycle) return;
@@ -98,43 +96,15 @@ export default function Home() {
   const strokeDashoffset = circumference - progressRatio * circumference;
 
   return (
-    <div className="flex min-h-full flex-col items-center px-4 sm:px-5 pt-4 sm:pt-6 pb-6">
-      {/* Top Compact Status Strip */}
-      <div className="w-full flex items-center justify-between gap-2 mb-3 sm:mb-4">
-        <div className="flex items-center space-x-2 min-w-0">
-          <img
-            src={LOGO_URL}
-            alt="Kitty Medallion"
-            referrerPolicy="no-referrer"
-            className="h-6 w-6 shrink-0 rounded-full object-contain"
-          />
-          <span className="font-display text-sm font-bold tracking-tight text-white truncate">
-            Kitty Medallion
-          </span>
-        </div>
-
-        <div className="flex items-center space-x-1.5 text-xs font-medium text-zinc-400 shrink-0">
-          <img
-            src={USDT_LOGO_URL}
-            alt="USDT"
-            referrerPolicy="no-referrer"
-            className="h-4 w-4 shrink-0 rounded-full object-contain"
-          />
-          <span className="font-mono tabular-nums text-emerald-400 font-semibold">
-            ≈ {usdtEquivalent.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </span>
-          <span className="text-zinc-500">USDT</span>
-        </div>
-      </div>
-
-      {/* Total Claimed Balance Readout */}
+    <div className="flex min-h-full flex-col items-center px-4 sm:px-5 pt-4 sm:pt-5 pb-6">
+      {/* Total Claimed Balance Readout (KITTY Coin Icon) */}
       <div className="mb-2 sm:mb-3 text-center w-full">
         <p className="mb-1 text-[11px] sm:text-xs font-medium text-zinc-400">
           Total Wallet Balance
         </p>
         <div className="flex items-center justify-center space-x-2">
           <img
-            src={LOGO_URL}
+            src={KITTY_COIN_ICON_URL}
             className="h-6 w-6 sm:h-7 sm:w-7 shrink-0 rounded-full object-contain"
             alt="KITTY"
             referrerPolicy="no-referrer"
@@ -145,7 +115,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Central Medallion with 24-Hour SVG Circular Progress Halo */}
+      {/* Central Medallion with 24-Hour SVG Circular Progress Halo (App Logo preserved) */}
       <div className="relative my-1.5 sm:my-2 flex items-center justify-center">
         <div
           className={`pointer-events-none absolute h-44 w-44 sm:h-48 sm:w-48 rounded-full blur-2xl transition-colors duration-500 ${
@@ -188,7 +158,7 @@ export default function Home() {
           className="absolute z-10 cursor-pointer select-none p-2"
         >
           <img
-            src={LOGO_URL}
+            src={APP_LOGO_URL}
             alt="Kitty Medallion"
             referrerPolicy="no-referrer"
             className="h-28 w-28 sm:h-32 sm:w-32 object-contain drop-shadow-[0_14px_32px_rgba(245,158,11,0.38)]"
@@ -205,7 +175,7 @@ export default function Home() {
             </span>
             <div className="mt-1 flex items-center space-x-1.5">
               <img
-                src={LOGO_URL}
+                src={KITTY_COIN_ICON_URL}
                 className="h-4 w-4 sm:h-5 sm:w-5 shrink-0 rounded-full object-contain"
                 alt="KITTY"
                 referrerPolicy="no-referrer"
@@ -269,7 +239,7 @@ export default function Home() {
           ) : isCycleReady ? (
             <>
               <img
-                src={LOGO_URL}
+                src={KITTY_COIN_ICON_URL}
                 className="h-4 w-4 rounded-full object-contain"
                 alt="KITTY"
                 referrerPolicy="no-referrer"
@@ -295,7 +265,7 @@ export default function Home() {
             </div>
             <div className="mt-1 flex items-center space-x-1">
               <img
-                src={LOGO_URL}
+                src={KITTY_COIN_ICON_URL}
                 className="h-3.5 w-3.5 rounded-full object-contain"
                 alt="KITTY"
                 referrerPolicy="no-referrer"

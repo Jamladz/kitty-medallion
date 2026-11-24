@@ -6,7 +6,7 @@ import { triggerTelegramHaptic } from '../lib/telegram';
 import { Gift, CheckCircle2, X, Wallet } from 'lucide-react';
 
 const USDT_LOGO_URL = 'https://i.ibb.co/N2WMd6QC/Tether-USDT.png';
-const KITTY_LOGO_URL = 'https://i.suar.me/PpEzN/l';
+const KITTY_LOGO_URL = 'https://i.ibb.co/3ykKfM0F/file-00000000e9e88246928f3f50b525d0a7.png';
 
 export const ReferralWelcomeSheet: React.FC = () => {
   const { user } = useAuth();

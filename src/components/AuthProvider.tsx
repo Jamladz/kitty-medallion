@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import {
   getEffectiveTelegramUser,
   detectReferrerOnLaunch,
+  initTelegramFullscreen,
 } from '../lib/telegram';
 import { REFERRAL_CONFIG } from '../lib/rewardsEngine';
 import { hasValidReferrer, referralService } from '../lib/referrals';
@@ -197,22 +198,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const initAuth = async () => {
       try {
-        const webApp = window.Telegram?.WebApp;
-        if (webApp) {
-          webApp.ready();
-          webApp.expand();
-          if (
-            webApp.isVersionAtLeast &&
-            webApp.isVersionAtLeast('8.0') &&
-            webApp.requestFullscreen
-          ) {
-            try {
-              webApp.requestFullscreen();
-            } catch (e) {
-              console.log('Fullscreen not supported', e);
-            }
-          }
-        }
+        initTelegramFullscreen();
 
         // Load cached user immediately if available so startup is fast and resilient
         const cached = getCachedUser(userId);

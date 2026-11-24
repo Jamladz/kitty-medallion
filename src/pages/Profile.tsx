@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-const LOGO_URL = 'https://i.suar.me/PpEzN/l';
+const LOGO_URL = 'https://i.ibb.co/3ykKfM0F/file-00000000e9e88246928f3f50b525d0a7.png';
 const USDT_LOGO_URL = 'https://i.ibb.co/N2WMd6QC/Tether-USDT.png';
 const RATE = 10000;
 const CYCLE_DURATION_MS = 24 * 60 * 60 * 1000;

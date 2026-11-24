@@ -28,7 +28,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-const LOGO_URL = 'https://i.suar.me/PpEzN/l';
+const LOGO_URL = 'https://i.ibb.co/3ykKfM0F/file-00000000e9e88246928f3f50b525d0a7.png';
 const DEFAULT_BOT_USERNAME =
   (typeof import.meta !== 'undefined' &&
     (import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME) ||

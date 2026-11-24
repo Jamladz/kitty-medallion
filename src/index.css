@@ -8,10 +8,22 @@
 
 :root {
   --app-height: var(--tg-viewport-stable-height, 100dvh);
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-left: env(safe-area-inset-left, 0px);
-  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-top: var(
+    --tg-header-safe-top,
+    calc(
+      var(--tg-safe-area-inset-top, env(safe-area-inset-top, 0px)) +
+        var(--tg-content-safe-area-inset-top, 0px)
+    )
+  );
+  --safe-bottom: var(
+    --tg-nav-safe-bottom,
+    max(
+      var(--tg-safe-area-inset-bottom, 0px),
+      env(safe-area-inset-bottom, 0px)
+    )
+  );
+  --safe-left: var(--tg-safe-area-inset-left, env(safe-area-inset-left, 0px));
+  --safe-right: var(--tg-safe-area-inset-right, env(safe-area-inset-right, 0px));
 }
 
 @layer base {
@@ -59,4 +71,3 @@
   background: rgba(255, 255, 255, 0.08);
   border-radius: 9999px;
 }
-
