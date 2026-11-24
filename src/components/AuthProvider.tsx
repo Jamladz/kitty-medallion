@@ -1,9 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { db } from '../lib/firebase';
-import { doc, onSnapshot, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import { api } from '../lib/api';
 import {
-  isRealTelegramUserId,
   getEffectiveTelegramUser,
   detectReferrerOnLaunch,
   initTelegramFullscreen,
@@ -30,15 +29,7 @@ export const useAuth = () => useContext(AuthContext);
 const getCachedUser = (userId: string) => {
   try {
     const raw = window.localStorage.getItem(`kitty_user_cache_${userId}`);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (!isRealTelegramUserId(userId) && parsed) {
-        parsed.referredBy = null;
-        parsed.referrerId = null;
-        parsed.referredAt = null;
-      }
-      return parsed;
-    }
+    if (raw) return JSON.parse(raw);
   } catch {
     // ignore storage errors
   }
@@ -48,12 +39,9 @@ const getCachedUser = (userId: string) => {
 const saveCachedUser = (userId: string, data: any) => {
   try {
     if (data) {
-      const clean = !isRealTelegramUserId(userId)
-        ? { ...data, referredBy: null, referrerId: null, referredAt: null }
-        : data;
       window.localStorage.setItem(
         `kitty_user_cache_${userId}`,
-        JSON.stringify(clean)
+        JSON.stringify(data)
       );
     }
   } catch {
@@ -65,8 +53,7 @@ const buildDefaultUser = (
   userId: string,
   firstName: string,
   lastName: string,
-  username: string,
-  photoUrl = ''
+  username: string
 ) => {
   const now = Date.now();
   return {
@@ -74,7 +61,6 @@ const buildDefaultUser = (
     firstName,
     lastName,
     username,
-    photoUrl,
     balanceKitty: 0,
     balanceUsdt: 0,
     miningSpeed: REFERRAL_CONFIG.DEFAULT_BASE_SPEED,
@@ -97,7 +83,6 @@ const mergeUserSnapshots = (primary: any, secondary: any, userId: string) => {
   if (!primary) return secondary;
   if (!secondary) return primary;
 
-  const isRealUser = isRealTelegramUserId(userId);
   const primaryRefs = Math.max(
     Number(primary.referralsCount) || 0,
     Number(primary.referralCount) || 0
@@ -108,35 +93,19 @@ const mergeUserSnapshots = (primary: any, secondary: any, userId: string) => {
   );
   const bestRefs = Math.max(primaryRefs, secondaryRefs);
 
-  const validRef = isRealUser
-    ? (hasValidReferrer(primary, userId)
-        ? primary.referredBy || primary.referrerId
-        : null) ||
-      (hasValidReferrer(secondary, userId)
-        ? secondary.referredBy || secondary.referrerId
-        : null) ||
-      null
-    : null;
-
-  const rawLast = String(primary.lastName ?? secondary.lastName ?? '').trim();
-  const rawFirst = String(
-    primary.firstName || secondary.firstName || ''
-  ).trim();
-  const cleanLast =
-    isRealUser &&
-    rawLast.toLowerCase() === 'user' &&
-    rawFirst.toLowerCase() !== 'developer'
-      ? ''
-      : rawLast;
+  const validRef =
+    (hasValidReferrer(primary, userId)
+      ? primary.referredBy || primary.referrerId
+      : null) ||
+    (hasValidReferrer(secondary, userId)
+      ? secondary.referredBy || secondary.referrerId
+      : null) ||
+    null;
 
   return {
     ...secondary,
     ...primary,
     id: userId,
-    firstName: rawFirst || 'Miner',
-    lastName: cleanLast,
-    username: primary.username || secondary.username || '',
-    photoUrl: primary.photoUrl || secondary.photoUrl || '',
     referralsCount: bestRefs,
     referralCount: bestRefs,
     earnedReferralCoins: Math.max(
@@ -172,9 +141,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [resolvedTgUserId, setResolvedTgUserId] = useState<string>(
-    () => getEffectiveTelegramUser().id
-  );
 
   useEffect(() => {
     const handleUserUpdatedEvent = (event: Event) => {
@@ -196,39 +162,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Re-check Telegram WebApp user during initial launch window in case mobile WebView bridge populates slightly after mount
-  useEffect(() => {
-    if (isRealTelegramUserId(resolvedTgUserId)) return;
-    const timers = [100, 350, 900, 2000].map((ms) =>
-      setTimeout(() => {
-        const latest = getEffectiveTelegramUser();
-        if (latest?.id && isRealTelegramUserId(latest.id)) {
-          setResolvedTgUserId(latest.id);
-        }
-      }, ms)
-    );
-    return () => timers.forEach(clearTimeout);
-  }, [resolvedTgUserId]);
-
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
 
     const effectiveUser = getEffectiveTelegramUser();
     const userId = effectiveUser.id;
-    const isRealUser = isRealTelegramUserId(userId);
     const firstName = effectiveUser.first_name || 'Miner';
-    const rawLast = effectiveUser.last_name || '';
-    const lastName =
-      isRealUser &&
-      rawLast.toLowerCase() === 'user' &&
-      firstName.toLowerCase() !== 'developer'
-        ? ''
-        : rawLast;
+    const lastName = effectiveUser.last_name || '';
     const username = effectiveUser.username || '';
-    const photoUrl = effectiveUser.photo_url || '';
 
     const checkAndProcessReferralIfNeeded = async () => {
-      if (!isRealUser) return;
       const currentCached = getCachedUser(userId);
       const detectedRef = detectReferrerOnLaunch(userId);
       if (detectedRef || !hasValidReferrer(currentCached, userId)) {
@@ -238,7 +181,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             currentUserFirstName: firstName,
             currentUserLastName: lastName,
             currentUserUsername: username,
-            currentUserPhotoUrl: photoUrl,
             rawReferrerParam: detectedRef,
           });
           if (refRes?.user) {
@@ -264,20 +206,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           setUser(cached);
         }
 
-        // 1. Detect Referrer ID in exact priority order (only for real Telegram users):
-        const referrerId = isRealUser ? detectReferrerOnLaunch(userId) : null;
+        // 1. Detect Referrer ID in exact priority order:
+        //    a) Telegram WebApp start_param (initDataUnsafe.start_param / initData)
+        //    b) Fallback: query & hash parameters (startapp / ref / start)
+        const referrerId = detectReferrerOnLaunch(userId);
 
         // 2. Execute atomic Firestore referral attribution FIRST (if referrerId detected or pending_referrals exists)
+        //    This ensures cross-device Firestore records for BOTH the invited user and the inviter are updated immediately!
         let currentBestUser = cached;
         let referralAppliedNow = false;
-        if (isRealUser && (referrerId || !hasValidReferrer(cached, userId))) {
+        if (referrerId || !hasValidReferrer(cached, userId)) {
           try {
             const refRes = await referralService.processReferral({
               currentUserId: userId,
               currentUserFirstName: firstName,
               currentUserLastName: lastName,
               currentUserUsername: username,
-              currentUserPhotoUrl: photoUrl,
               rawReferrerParam: referrerId,
             });
             if (refRes?.applied) {
@@ -306,11 +250,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             const docData = userDocSnap.data();
             // If Firestore docData has no referrer and we didn't apply a referral yet in this session,
             // do not let a stale localStorage referredBy mask the unreferred state of this existing account
-            if (
-              !hasValidReferrer(docData, userId) &&
-              !referralAppliedNow &&
-              currentBestUser
-            ) {
+            if (!hasValidReferrer(docData, userId) && !referralAppliedNow && currentBestUser) {
               currentBestUser = {
                 ...currentBestUser,
                 referredBy: null,
@@ -323,40 +263,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
               currentBestUser,
               userId
             );
-
-            // Sync real Telegram profile fields (firstName, lastName, username, photoUrl) if updated
-            if (
-              isRealUser &&
-              ((firstName && docData.firstName !== firstName) ||
-                docData.lastName !== lastName ||
-                (username && docData.username !== username) ||
-                (photoUrl && docData.photoUrl !== photoUrl))
-            ) {
-              const profilePatch: Record<string, any> = {
-                firstName,
-                lastName,
-                username: username || docData.username || '',
-              };
-              if (photoUrl) profilePatch.photoUrl = photoUrl;
-              updateDoc(userDocRef, profilePatch).catch(() => {});
-              currentBestUser = { ...currentBestUser, ...profilePatch };
-            }
-
             setUser(currentBestUser);
             saveCachedUser(userId, currentBestUser);
             setLoading(false);
 
-            // If this existing real account still has no referrer in Firestore and a referrer is detected, process it now
-            const retryRef = isRealUser
-              ? referrerId || detectReferrerOnLaunch(userId)
-              : null;
-            if (isRealUser && !hasValidReferrer(docData, userId) && retryRef) {
+            // If this existing account still has no referrer in Firestore and a referrer is detected, process it now
+            const retryRef = referrerId || detectReferrerOnLaunch(userId);
+            if (!hasValidReferrer(docData, userId) && retryRef) {
               const retryRes = await referralService.processReferral({
                 currentUserId: userId,
                 currentUserFirstName: firstName,
                 currentUserLastName: lastName,
                 currentUserUsername: username,
-                currentUserPhotoUrl: photoUrl,
                 rawReferrerParam: retryRef,
               });
               if (retryRes?.user) {
@@ -374,8 +292,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
               userId,
               firstName,
               lastName,
-              username,
-              photoUrl
+              username
             );
             await setDoc(userDocRef, initialUser);
             currentBestUser = initialUser;
@@ -390,14 +307,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         // 4. Sync with backend API (passing currentBestUser so backend never overwrites Firestore with stale data)
         try {
           const authData = await api.auth(
-            isRealUser ? referrerId || undefined : undefined,
+            referrerId || undefined,
             currentBestUser
           );
           if (authData && !authData.fallback && authData.user) {
-            if (
-              isRealUser &&
-              (authData.referralApplied || authData.welcomeGiftGranted)
-            ) {
+            if (authData.referralApplied || authData.welcomeGiftGranted) {
               try {
                 window.localStorage.removeItem(
                   `kitty_usdt_welcome_sheet_claimed_${userId}`
@@ -482,13 +396,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     initAuth();
 
-    // 7. Re-check referral parameters during initial launch window and when app resumes, activates in Telegram, or URL changes
-    const earlyRefTimers = [450, 1500].map((ms) =>
-      setTimeout(() => {
-        checkAndProcessReferralIfNeeded();
-      }, ms)
-    );
-
+    // 7. Re-check referral parameters and reconcile Firestore referrals when app resumes, activates in Telegram, or URL changes
     const handleAppResumeOrUrlChange = () => {
       if (document.visibilityState === 'hidden') return;
       checkAndProcessReferralIfNeeded();
@@ -504,7 +412,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch {}
 
     return () => {
-      earlyRefTimers.forEach(clearTimeout);
       if (unsubscribe) unsubscribe();
       window.removeEventListener('focus', handleAppResumeOrUrlChange);
       window.removeEventListener('hashchange', handleAppResumeOrUrlChange);
@@ -517,7 +424,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         window.Telegram?.WebApp?.offEvent?.('activated', handleAppResumeOrUrlChange);
       } catch {}
     };
-  }, [resolvedTgUserId]);
+  }, []);
 
   const refreshMining = async () => {
     try {

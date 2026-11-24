@@ -224,87 +224,6 @@ const syncDocToFirestoreWriteOnly = (collectionName: string, docId: string, data
     });
 };
 
-const isRealTelegramUserId = (id?: string | null): boolean => {
-  if (!id) return false;
-  const clean = String(id).trim();
-  if (!clean || clean === '999999999' || clean === '0') return false;
-  if (clean.startsWith('test_')) return false;
-  return /^\d{5,20}$/.test(clean);
-};
-
-const cleanTelegramLastName = (
-  firstName?: string | null,
-  lastName?: string | null
-): string => {
-  const rawLast = String(lastName || '').trim();
-  const rawFirst = String(firstName || '').trim();
-  if (
-    rawLast.toLowerCase() === 'user' &&
-    rawFirst.toLowerCase() !== 'developer'
-  ) {
-    return '';
-  }
-  return rawLast;
-};
-
-const formatTelegramDisplayName = (
-  firstName?: string | null,
-  lastName?: string | null,
-  username?: string | null,
-  fallbackId?: string | null
-): string => {
-  const cleanFirst = String(firstName || '').trim();
-  const cleanLast = cleanTelegramLastName(cleanFirst, lastName);
-  const full = `${cleanFirst} ${cleanLast}`
-    .replace(/\s+User$/i, '')
-    .trim();
-
-  if (
-    full &&
-    full.toLowerCase() !== 'miner' &&
-    full.toLowerCase() !== 'telegram friend' &&
-    full.toLowerCase() !== 'developer user' &&
-    full.toLowerCase() !== 'developer'
-  ) {
-    return full;
-  }
-
-  const cleanUsername = String(username || '')
-    .trim()
-    .replace(/^@/, '');
-  if (cleanUsername && cleanUsername !== 'dev_user') {
-    return cleanUsername;
-  }
-
-  if (cleanFirst && cleanFirst.toLowerCase() !== 'developer') {
-    return cleanFirst;
-  }
-
-  if (fallbackId && isRealTelegramUserId(fallbackId)) {
-    return `Telegram User #${String(fallbackId).slice(-4)}`;
-  }
-
-  return 'Telegram User';
-};
-
-// Sanitize any mock/test accounts in serverLedger on startup
-for (const [uid, u] of Object.entries(serverLedger.users)) {
-  if (!isRealTelegramUserId(uid) && u && typeof u === 'object') {
-    u.referredBy = null;
-    u.referrerId = null;
-    u.referredAt = null;
-  }
-}
-for (const [recId, rec] of Object.entries(serverLedger.referrals)) {
-  if (
-    !rec ||
-    !isRealTelegramUserId(rec.referredId) ||
-    !isRealTelegramUserId(rec.referrerId)
-  ) {
-    delete serverLedger.referrals[recId];
-  }
-}
-
 const extractReferrerId = (rawParam?: string | null): string | null => {
   if (!rawParam) return null;
   const cleaned = String(rawParam).trim();
@@ -315,25 +234,26 @@ const extractReferrerId = (rawParam?: string | null): string | null => {
       ''
     )
     .trim();
-  if (/^\d+$/.test(withoutPrefix) && isRealTelegramUserId(withoutPrefix)) {
+  if (/^\d+$/.test(withoutPrefix)) {
     return withoutPrefix;
   }
   const match = withoutPrefix.match(
     /(?:ref_tg_|ref_tg-|ref_|r_|ref-|invite_|inviter_|tg_|u_|user_)?(\d{5,20})/i
   );
-  if (match && match[1] && isRealTelegramUserId(match[1])) {
+  if (match && match[1]) {
     return match[1];
   }
   return null;
 };
 
-// Checks if a user already has a valid real Telegram referrer (ignores null, empty string, self, or mock 999999999)
+// Checks if a user already has a valid real referrer (ignores null, empty string, self, or mock 999999999)
 const getValidExistingReferrer = (userData: any, currentUserId: string): string | null => {
-  if (!userData || !isRealTelegramUserId(currentUserId)) return null;
+  if (!userData) return null;
   const raw = String(userData.referredBy || userData.referrerId || '').trim();
   if (!raw || raw === 'null' || raw === 'undefined') return null;
   if (raw === String(currentUserId)) return null;
-  if (!isRealTelegramUserId(raw)) return null;
+  if (raw === '999999999' && String(currentUserId) !== '999999999') return null;
+  if (!/^\d+$/.test(raw)) return null;
   return raw;
 };
 
@@ -364,12 +284,7 @@ app.post('/api/telegram-webhook', async (req, res) => {
       const inviterId = extractReferrerId(startPayload);
       const newUserId = String(fromUser.id);
 
-      if (
-        inviterId &&
-        inviterId !== newUserId &&
-        isRealTelegramUserId(inviterId) &&
-        isRealTelegramUserId(newUserId)
-      ) {
+      if (inviterId && inviterId !== newUserId) {
         serverLedger.pendingReferrals[newUserId] = inviterId;
         saveLedgerToDisk(true);
         db.collection('pending_referrals')
@@ -400,16 +315,13 @@ const SERVER_MILESTONES = [
   { id: 'milestone_25', targetCount: 25, rewardCoins: 7000, speedBoost: 1500, vipDays: 30 }
 ];
 
-// Reconcile a user's referral counters with all real referral records in serverLedger.referrals
+// Reconcile a user's referral counters with all referral records in serverLedger.referrals
 function reconcileUserReferralsInLedger(userId: string) {
   const user = serverLedger.users[userId];
   if (!user) return null;
 
   const userRefs = Object.values(serverLedger.referrals).filter(
-    (r: any) =>
-      String(r.referrerId) === String(userId) &&
-      isRealTelegramUserId(String(r.referredId)) &&
-      String(r.referredId) !== String(userId)
+    (r: any) => String(r.referrerId) === String(userId)
   );
   const ledgerRefCount = userRefs.length;
   const currentStoredCount = Math.max(
@@ -444,29 +356,25 @@ function mergeWithClientSnapshot(existing: any, clientSnap: any, userId: string)
   if (!clientSnap || typeof clientSnap !== 'object' || String(clientSnap.id) !== String(userId)) {
     return existing;
   }
-  const isReal = isRealTelegramUserId(userId);
-  const clientValidRef = isReal ? getValidExistingReferrer(clientSnap, userId) : null;
+  const clientValidRef = getValidExistingReferrer(clientSnap, userId);
   if (!existing) {
     return {
       ...clientSnap,
       id: userId,
       referredBy: clientValidRef,
       referrerId: clientValidRef,
-      referredAt: clientValidRef ? clientSnap.referredAt || null : null,
       _hydratedFromClient: true
     };
   }
-  const existingValidRef = isReal ? getValidExistingReferrer(existing, userId) : null;
+  const existingValidRef = getValidExistingReferrer(existing, userId);
   const bestRefs = Math.max(
     Number(existing.referralsCount) || 0,
     Number(existing.referralCount) || 0,
     Number(clientSnap.referralsCount) || 0,
     Number(clientSnap.referralCount) || 0
   );
-  const resolvedRef = isReal ? existingValidRef || clientValidRef || null : null;
   return {
     ...existing,
-    photoUrl: existing.photoUrl || clientSnap.photoUrl || '',
     balanceKitty: Math.max(Number(existing.balanceKitty) || 0, Number(clientSnap.balanceKitty) || 0),
     balanceUsdt: Math.max(Number(existing.balanceUsdt) || 0, Number(clientSnap.balanceUsdt) || 0),
     miningSpeed: Math.max(
@@ -481,9 +389,8 @@ function mergeWithClientSnapshot(existing: any, clientSnap: any, userId: string)
       Number(clientSnap.earnedReferralCoins) || 0,
       bestRefs * REFERRAL_REWARDS.REFERRER_REWARD
     ),
-    referredBy: resolvedRef,
-    referrerId: resolvedRef,
-    referredAt: resolvedRef ? existing.referredAt || clientSnap.referredAt || null : null,
+    referredBy: existingValidRef || clientValidRef || null,
+    referrerId: existingValidRef || clientValidRef || null,
     welcomeUsdtGranted: Boolean(existing.welcomeUsdtGranted || clientSnap.welcomeUsdtGranted),
     claimedMilestones: Array.from(
       new Set([
@@ -503,7 +410,6 @@ async function executeAtomicReferralTransaction(params: {
   firstName: string;
   lastName: string;
   username: string;
-  photoUrl?: string;
   candidateRef: string | null;
   clientCachedUser?: any;
   alreadyAppliedInFirestore?: boolean;
@@ -513,13 +419,11 @@ async function executeAtomicReferralTransaction(params: {
     firstName,
     lastName,
     username,
-    photoUrl = '',
     candidateRef,
     clientCachedUser,
     alreadyAppliedInFirestore = false
   } = params;
   const now = Date.now();
-  const isRealUser = isRealTelegramUserId(userId);
 
   // 1. Load existing user from Server Ledger and merge with latest Firestore document when reads are available
   let existingData = serverLedger.users[userId] || null;
@@ -541,18 +445,16 @@ async function executeAtomicReferralTransaction(params: {
   // do not allow a stale clientCachedUser.referredBy to block a new referral
   let safeClientSnap = clientCachedUser;
   if (
-    (!isRealUser ||
-      (firestoreDocData &&
-        !getValidExistingReferrer(firestoreDocData, userId) &&
-        !alreadyAppliedInFirestore)) &&
+    firestoreDocData &&
+    !getValidExistingReferrer(firestoreDocData, userId) &&
+    !alreadyAppliedInFirestore &&
     safeClientSnap
   ) {
     safeClientSnap = {
       ...safeClientSnap,
       referredBy: null,
       referrerId: null,
-      referredAt: null,
-      welcomeUsdtGranted: Boolean(firestoreDocData?.welcomeUsdtGranted)
+      welcomeUsdtGranted: Boolean(firestoreDocData.welcomeUsdtGranted)
     };
   }
 
@@ -561,13 +463,10 @@ async function executeAtomicReferralTransaction(params: {
 
   const isNewUser = !existingData;
 
-  // Check if this user already has a valid real Telegram referrer
-  let existingReferrer = isRealUser ? getValidExistingReferrer(existingData, userId) : null;
+  // Check if this user already has a valid referrer
+  let existingReferrer = getValidExistingReferrer(existingData, userId);
   const cleanCandidate =
-    isRealUser &&
-    candidateRef &&
-    candidateRef !== userId &&
-    isRealTelegramUserId(candidateRef)
+    candidateRef && candidateRef !== userId && /^\d+$/.test(candidateRef)
       ? candidateRef
       : null;
 
@@ -624,8 +523,7 @@ async function executeAtomicReferralTransaction(params: {
   }
 
   const shouldLinkToCandidate = Boolean(
-    isRealUser &&
-      cleanCandidate &&
+    cleanCandidate &&
       deterministicRefRecordId &&
       (!existingReferrer || existingReferrer === cleanCandidate)
   );
@@ -639,8 +537,7 @@ async function executeAtomicReferralTransaction(params: {
     shouldLinkToCandidate && !existingReferrer && !alreadyAppliedInFirestore
   );
   const needsWelcomeUsdt = Boolean(
-    isRealUser &&
-      (shouldLinkToCandidate || existingReferrer) &&
+    (shouldLinkToCandidate || existingReferrer) &&
       !existingData?.welcomeUsdtGranted &&
       !alreadyAppliedInFirestore
   );
@@ -648,25 +545,14 @@ async function executeAtomicReferralTransaction(params: {
     shouldLinkToCandidate && !recordAlreadyExists && !alreadyAppliedInFirestore
   );
 
-  const bestFirst = firstName || existingData?.firstName || 'Miner';
-  const bestLast = isRealUser
-    ? cleanTelegramLastName(
-        bestFirst,
-        lastName !== undefined ? lastName : existingData?.lastName || ''
-      )
-    : lastName || existingData?.lastName || '';
-  const bestUsername = username || existingData?.username || '';
-  const bestPhotoUrl = photoUrl || existingData?.photoUrl || '';
-
   // Step A: Build/Update the current user (referred user) in serverLedger
   let finalUserData: any;
   if (!existingData) {
     finalUserData = {
       id: userId,
-      firstName: bestFirst,
-      lastName: bestLast,
-      username: bestUsername,
-      photoUrl: bestPhotoUrl,
+      firstName: firstName || 'Miner',
+      lastName: lastName || '',
+      username: username || '',
       balanceKitty: grantsWelcomeBonus ? REFERRAL_REWARDS.WELCOME_BONUS : 0,
       balanceUsdt: needsWelcomeUsdt ? REFERRAL_REWARDS.WELCOME_BONUS_USDT : 0,
       welcomeUsdtGranted: Boolean(needsWelcomeUsdt || alreadyAppliedInFirestore),
@@ -686,10 +572,9 @@ async function executeAtomicReferralTransaction(params: {
     finalUserData = {
       ...existingData,
       id: userId,
-      firstName: bestFirst,
-      lastName: bestLast,
-      username: bestUsername,
-      photoUrl: bestPhotoUrl,
+      firstName: firstName || existingData.firstName || 'Miner',
+      lastName: lastName !== undefined ? lastName : existingData.lastName || '',
+      username: username || existingData.username || '',
       balanceKitty:
         (Number(existingData.balanceKitty) || 0) +
         (grantsWelcomeBonus ? REFERRAL_REWARDS.WELCOME_BONUS : 0),
@@ -699,21 +584,11 @@ async function executeAtomicReferralTransaction(params: {
       welcomeUsdtGranted: Boolean(
         existingData.welcomeUsdtGranted || needsWelcomeUsdt || alreadyAppliedInFirestore
       ),
-      referredBy: isRealUser
-        ? shouldLinkToCandidate
-          ? cleanCandidate
-          : existingReferrer
-        : null,
-      referrerId: isRealUser
-        ? shouldLinkToCandidate
-          ? cleanCandidate
-          : existingReferrer
-        : null,
-      referredAt: isRealUser
-        ? shouldLinkToCandidate
-          ? existingData.referredAt || now
-          : existingData.referredAt || null
-        : null
+      referredBy: shouldLinkToCandidate ? cleanCandidate : existingReferrer,
+      referrerId: shouldLinkToCandidate ? cleanCandidate : existingReferrer,
+      referredAt: shouldLinkToCandidate
+        ? existingData.referredAt || now
+        : existingData.referredAt || null
     };
   }
 
@@ -726,36 +601,30 @@ async function executeAtomicReferralTransaction(params: {
     referralApplied = Boolean(
       shouldApplyReferral || creditsReferrer || grantsWelcomeBonus || needsWelcomeUsdt || alreadyAppliedInFirestore
     );
-    const referredFullName = formatTelegramDisplayName(
-      finalUserData.firstName,
-      finalUserData.lastName,
-      finalUserData.username,
-      userId
-    );
+    const referredFullName =
+      `${finalUserData.firstName} ${finalUserData.lastName}`.trim() ||
+      finalUserData.username ||
+      `Miner #${userId.slice(-4)}`;
 
     const existingRec = serverLedger.referrals[deterministicRefRecordId];
-    const refRecord = {
-      ...(existingRec || {}),
+    const refRecord = existingRec || {
       id: deterministicRefRecordId,
       referrerId: cleanCandidate,
       referredId: userId,
       referredName: referredFullName,
-      referredFirstName: finalUserData.firstName,
-      referredLastName: finalUserData.lastName,
       referredUsername: finalUserData.username || '',
-      referredPhotoUrl: finalUserData.photoUrl || '',
       rewardAmount: REFERRAL_REWARDS.REFERRER_REWARD,
       welcomeBonus: REFERRAL_REWARDS.WELCOME_BONUS,
       welcomeBonusUsdt: REFERRAL_REWARDS.WELCOME_BONUS_USDT,
       speedBoost: REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
-      timestamp: existingRec?.timestamp || now
+      timestamp: now
     };
     serverLedger.referrals[deterministicRefRecordId] = refRecord;
 
     if (!referrerData) {
       referrerData = {
         id: cleanCandidate,
-        firstName: `Telegram User #${cleanCandidate.slice(-4)}`,
+        firstName: `Miner #${cleanCandidate.slice(-4)}`,
         lastName: '',
         username: '',
         balanceKitty: REFERRAL_REWARDS.REFERRER_REWARD,
@@ -848,15 +717,14 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
     ? new URLSearchParams(rawInitData).get('start_param')
     : null;
 
-  let candidateRef = isRealTelegramUserId(userId)
-    ? extractReferrerId(bodyReferrerId) ||
-      extractReferrerId(bodyStartParam) ||
-      extractReferrerId(initDataStartParam) ||
-      serverLedger.pendingReferrals[userId] ||
-      null
-    : null;
+  let candidateRef =
+    extractReferrerId(bodyReferrerId) ||
+    extractReferrerId(bodyStartParam) ||
+    extractReferrerId(initDataStartParam) ||
+    serverLedger.pendingReferrals[userId] ||
+    null;
 
-  if (!candidateRef && isRealTelegramUserId(userId) && isFirestoreReadAvailable()) {
+  if (!candidateRef && isFirestoreReadAvailable()) {
     try {
       const pendingSnap = await db.collection('pending_referrals').doc(userId).get();
       if (pendingSnap.exists) {
@@ -872,7 +740,6 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
         firstName: tUser.first_name || '',
         lastName: tUser.last_name || '',
         username: tUser.username || '',
-        photoUrl: tUser.photo_url || '',
         candidateRef,
         clientCachedUser
       });
@@ -902,21 +769,12 @@ app.post('/api/auth', authenticateTelegram, async (req, res) => {
 app.post('/api/referrals/process', authenticateTelegram, async (req, res) => {
   const tUser = (req as any).telegramUser;
   const userId = String((req as any).userId);
-
-  if (!isRealTelegramUserId(userId)) {
-    return res.json({
-      applied: false,
-      reason: 'not_real_telegram_user',
-      user: serverLedger.users[userId] || null
-    });
-  }
-
   const candidateRef =
     extractReferrerId(req.body?.referrerId) ||
     serverLedger.pendingReferrals[userId] ||
     null;
 
-  if (!candidateRef || candidateRef === userId || !isRealTelegramUserId(candidateRef)) {
+  if (!candidateRef || candidateRef === userId) {
     return res.json({
       applied: false,
       reason: 'invalid_or_self_referral',
@@ -931,7 +789,6 @@ app.post('/api/referrals/process', authenticateTelegram, async (req, res) => {
         firstName: tUser.first_name || '',
         lastName: tUser.last_name || '',
         username: tUser.username || '',
-        photoUrl: tUser.photo_url || '',
         candidateRef,
         clientCachedUser: req.body?.clientCachedUser,
         alreadyAppliedInFirestore: Boolean(req.body?.alreadyAppliedInFirestore)
@@ -1029,14 +886,12 @@ app.get('/api/referrals', authenticateTelegram, async (req, res) => {
   const userId = String((req as any).userId);
 
   try {
-    // 1. Collect all real Telegram referrals for this referrer from persistent serverLedger
+    // 1. Collect all referrals for this referrer from persistent serverLedger
     const byReferredId = new Map<string, any>();
     for (const rec of Object.values(serverLedger.referrals)) {
       if (String(rec.referrerId) === userId) {
-        const refId = String(rec.referredId || rec.id).trim();
-        if (refId && refId !== userId && isRealTelegramUserId(refId)) {
-          byReferredId.set(refId, rec);
-        }
+        const refId = String(rec.referredId || rec.id);
+        byReferredId.set(refId, rec);
       }
     }
 
@@ -1058,85 +913,45 @@ app.get('/api/referrals', authenticateTelegram, async (req, res) => {
           );
         }
 
-        const referredUserProfiles = new Map<string, any>();
-        for (const uDoc of [
-          ...referredByUsersSnap.docs,
-          ...referrerIdUsersSnap.docs
-        ]) {
-          const uData = uDoc.data();
-          const refId = String(uData.id || uDoc.id).trim();
-          if (refId && refId !== userId && isRealTelegramUserId(refId)) {
-            referredUserProfiles.set(refId, uData);
-          }
-        }
-
         for (const d of refSnap.docs) {
           const data = d.data();
-          const refId = String(data.referredId || d.id).trim();
-          if (!refId || refId === userId || !isRealTelegramUserId(refId)) {
-            continue;
-          }
-          const uProfile =
-            referredUserProfiles.get(refId) || serverLedger.users[refId] || null;
-          const cleanFirst = String(
-            uProfile?.firstName || data.referredFirstName || ''
-          ).trim();
-          const cleanLast = cleanTelegramLastName(
-            cleanFirst,
-            uProfile?.lastName || data.referredLastName || ''
-          );
-          const cleanUsername = String(
-            uProfile?.username || data.referredUsername || ''
-          ).trim();
-          const cleanPhoto = String(
-            uProfile?.photoUrl || data.referredPhotoUrl || ''
-          ).trim();
-          const displayName = formatTelegramDisplayName(
-            cleanFirst || data.referredName,
-            cleanLast,
-            cleanUsername,
-            refId
-          );
-
+          const refId = String(data.referredId || d.id);
           const item = {
             id: `${userId}_${refId}`,
             referrerId: userId,
             referredId: refId,
-            referredName: displayName,
-            referredFirstName: cleanFirst,
-            referredLastName: cleanLast,
-            referredUsername: cleanUsername,
-            referredPhotoUrl: cleanPhoto,
+            referredName: data.referredName || 'Telegram Friend',
+            referredUsername: data.referredUsername || '',
             rewardAmount: data.rewardAmount || REFERRAL_REWARDS.REFERRER_REWARD,
             welcomeBonus: data.welcomeBonus || REFERRAL_REWARDS.WELCOME_BONUS,
             speedBoost: data.speedBoost || REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
             timestamp: data.timestamp || Date.now()
           };
-          byReferredId.set(refId, item);
-          serverLedger.referrals[item.id] = item;
+          if (!byReferredId.has(refId)) {
+            byReferredId.set(refId, item);
+            serverLedger.referrals[item.id] = item;
+          }
         }
 
-        for (const [refId, uData] of referredUserProfiles.entries()) {
-          if (!byReferredId.has(refId)) {
-            const cleanFirst = String(uData.firstName || '').trim();
-            const cleanLast = cleanTelegramLastName(cleanFirst, uData.lastName);
-            const cleanUsername = String(uData.username || '').trim();
-            const cleanPhoto = String(uData.photoUrl || '').trim();
-            const fullName = formatTelegramDisplayName(
-              cleanFirst,
-              cleanLast,
-              cleanUsername,
-              refId
-            );
+        const allReferredDocs = [
+          ...referredByUsersSnap.docs,
+          ...referrerIdUsersSnap.docs
+        ];
+
+        for (const uDoc of allReferredDocs) {
+          const uData = uDoc.data();
+          const refId = String(uData.id || uDoc.id);
+          if (refId && refId !== userId && !byReferredId.has(refId)) {
+            const fullName =
+              `${uData.firstName || ''} ${uData.lastName || ''}`.trim() ||
+              uData.username ||
+              `Miner #${refId.slice(-4)}`;
             const item = {
               id: `${userId}_${refId}`,
               referrerId: userId,
               referredId: refId,
               referredName: fullName,
-              referredFirstName: cleanFirst,
-              referredLastName: cleanLast,
-              referredUsername: cleanUsername,
-              referredPhotoUrl: cleanPhoto,
+              referredUsername: uData.username || '',
               rewardAmount: REFERRAL_REWARDS.REFERRER_REWARD,
               welcomeBonus: REFERRAL_REWARDS.WELCOME_BONUS,
               speedBoost: REFERRAL_REWARDS.REFERRER_SPEED_BOOST,
@@ -1148,7 +963,7 @@ app.get('/api/referrals', authenticateTelegram, async (req, res) => {
           }
         }
 
-        if (refSnap.docs.length > 0 || referredUserProfiles.size > 0) {
+        if (refSnap.docs.length > 0 || allReferredDocs.length > 0) {
           saveLedgerToDisk();
         }
       } catch (fsErr) {

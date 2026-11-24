@@ -252,70 +252,8 @@ export function checkOfficialTelegramHomeScreenStatus(): Promise<HomeScreenStatu
 }
 
 /**
- * Verifies that a user ID belongs to a real Telegram account (numeric 5..20 digits)
- * and is never the mock browser preview account ('999999999') or a test ID.
- */
-export function isRealTelegramUserId(id?: string | null): boolean {
-  if (!id) return false;
-  const clean = String(id).trim();
-  if (!clean || clean === '999999999' || clean === '0') return false;
-  if (clean.startsWith('test_')) return false;
-  return /^\d{5,20}$/.test(clean);
-}
-
-/**
- * Formats a Telegram user's display name professionally like native Telegram Mini Apps.
- * Strips artificial legacy "User" last names so single-name Telegram users display cleanly.
- */
-export function formatTelegramDisplayName(
-  firstName?: string | null,
-  lastName?: string | null,
-  username?: string | null,
-  fallbackId?: string | null
-): string {
-  const cleanFirst = String(firstName || '').trim();
-  const rawLast = String(lastName || '').trim();
-  const cleanLast =
-    rawLast.toLowerCase() === 'user' &&
-    cleanFirst.toLowerCase() !== 'developer'
-      ? ''
-      : rawLast;
-
-  const full = `${cleanFirst} ${cleanLast}`
-    .replace(/\s+User$/i, '')
-    .trim();
-
-  if (
-    full &&
-    full.toLowerCase() !== 'miner' &&
-    full.toLowerCase() !== 'telegram friend' &&
-    full.toLowerCase() !== 'developer user' &&
-    full.toLowerCase() !== 'developer'
-  ) {
-    return full;
-  }
-
-  const cleanUsername = String(username || '')
-    .trim()
-    .replace(/^@/, '');
-  if (cleanUsername && cleanUsername !== 'dev_user') {
-    return cleanUsername;
-  }
-
-  if (cleanFirst && cleanFirst.toLowerCase() !== 'developer') {
-    return cleanFirst;
-  }
-
-  if (fallbackId && isRealTelegramUserId(fallbackId)) {
-    return `Telegram User #${String(fallbackId).slice(-4)}`;
-  }
-
-  return 'Telegram User';
-}
-
-/**
  * Cleans the "ref_tg_" / "ref_" prefix (including URL-encoded or Base64-encoded start_param values)
- * and validates that the referrerId is a real numeric Telegram ID
+ * and validates that the referrerId is a valid numeric Telegram ID
  * and not equal to currentUserId (prevents self-referral).
  */
 export function sanitizeReferrerId(
@@ -372,7 +310,7 @@ export function sanitizeReferrerId(
     } catch {}
   }
 
-  if (!candidate || !isRealTelegramUserId(candidate)) return null;
+  if (!candidate) return null;
   if (currentUserId && candidate === String(currentUserId)) {
     return null; // Ignore self-referral
   }
@@ -706,15 +644,47 @@ export function getEffectiveTelegramUser(): TelegramWebAppUser {
 
     // Check if we already captured the real Telegram user earlier in this WebView session
     try {
-      sessionStorage.removeItem('kitty_browser_visitor_id');
       const sessionUserRaw = sessionStorage.getItem(
         'kitty_real_tg_user_session'
       );
       if (sessionUserRaw) {
         const parsed = JSON.parse(sessionUserRaw);
-        if (parsed && parsed.id && isRealTelegramUserId(String(parsed.id))) {
+        if (parsed && parsed.id) {
           return parsed;
         }
+      }
+    } catch {}
+
+    // Browser preview support: generate distinct visitor ID if testing any referral link in browser outside Telegram
+    try {
+      const search = new URLSearchParams(window.location.search);
+      const rawRef =
+        search.get('startapp') ||
+        search.get('ref') ||
+        search.get('start') ||
+        search.get('tgWebAppStartParam') ||
+        '';
+      const cleanedRef = sanitizeReferrerId(rawRef);
+      const storedVisitorId = sessionStorage.getItem('kitty_browser_visitor_id');
+      if (storedVisitorId) {
+        return {
+          id: storedVisitorId,
+          first_name: 'Invited',
+          last_name: `Fren #${storedVisitorId.slice(-4)}`,
+          username: `fren_${storedVisitorId.slice(-4)}`,
+        };
+      }
+      if (cleanedRef) {
+        const generatedId = String(
+          Math.floor(100000000 + Math.random() * 800000000)
+        );
+        sessionStorage.setItem('kitty_browser_visitor_id', generatedId);
+        return {
+          id: generatedId,
+          first_name: 'Invited',
+          last_name: `Fren #${generatedId.slice(-4)}`,
+          username: `fren_${generatedId.slice(-4)}`,
+        };
       }
     } catch {}
   }
